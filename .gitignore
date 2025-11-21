@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / dll files
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+# C extensions
+*.so
+# Distribution / packaging
+.Python
+build/
+dist/
+# Environments
+.env
+venv/
+env/
+# IDEs and editors
+.vscode/
+.idea/
+# Output files
+episode_story.json
+story_export.md
+story_export.html
+story_game.json

@@ -1,0 +1,8 @@
+python-dotenv
+openai
+langchain-openai
+langchain-core
+langgraph
+fastapi
+uvicorn[standard]
+python-multipart
