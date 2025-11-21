@@ -18,6 +18,7 @@ class Gauge(TypedDict):
     min_label: str
     max_label: str
     description: str
+    initial_value: int  # AI가 소설 상황에 맞게 설정 (0~100)
 
 
 class FinalEnding(TypedDict):

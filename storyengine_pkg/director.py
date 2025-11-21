@@ -128,6 +128,8 @@ class InteractiveStoryDirector:
 - min_label: 0일 때의 상태 (예: "야만", "평온")
 - max_label: 100일 때의 상태 (예: "질서", "공포")
 - description: 스토리에서 이 게이지가 어떻게 사용되는지 설명
+- initial_value: 소설 시작 시점의 초기값 (0~100, 소설 상황에 맞게 설정)
+  - 예: 평화로운 시작이면 hope=70, 위기 상황이면 hope=30
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
@@ -138,7 +140,8 @@ class InteractiveStoryDirector:
             "meaning": "사회 질서와 규범을 유지하려는 정도",
             "min_label": "야만",
             "max_label": "질서",
-            "description": "높을수록 민주적 리더십과 규칙을 따르고, 낮을수록 본능과 폭력에 의존"
+            "description": "높을수록 민주적 리더십과 규칙을 따르고, 낮을수록 본능과 폭력에 의존",
+            "initial_value": 65
         }}
     ]
 }}"""
@@ -164,8 +167,26 @@ class InteractiveStoryDirector:
     # --------------------------------------------------------------------------
     # [4단계] 최종 엔딩 생성 (Generate Final Endings - 게이지 누적 기반)
     # --------------------------------------------------------------------------
-    async def design_final_endings(self, novel_summary: str, selected_gauges: List[Gauge], user_request: str = "") -> List[FinalEnding]:
-        print("🏁 최종 엔딩 설계 중...")
+    async def design_final_endings(
+        self,
+        novel_summary: str,
+        selected_gauges: List[Gauge],
+        ending_config: Dict[str, int] = None
+    ) -> List[FinalEnding]:
+        """
+        최종 엔딩 설계
+
+        Args:
+            ending_config: 엔딩 타입별 개수 설정
+                예: {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+                지원 타입: happy, tragic, neutral, open, bad, bittersweet
+        """
+        # 기본값 설정
+        if ending_config is None:
+            ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+
+        total_endings = sum(ending_config.values())
+        print(f"🏁 최종 엔딩 설계 중 ({total_endings}개)...")
 
         # 게이지 정보 포맷팅
         gauges_detail = []
@@ -174,7 +195,25 @@ class InteractiveStoryDirector:
             gauges_detail.append(gauge_str)
         gauges_info = "\n".join(gauges_detail)
 
-        prompt = f"""선택된 게이지의 최종 누적 수치에 따라 도달할 수 있는 4~6가지의 최종 엔딩을 설계하세요.
+        # 엔딩 타입 요구사항 생성
+        ending_requirements = []
+        type_descriptions = {
+            "happy": "행복한 엔딩 (희망적인 결말, 목표 달성)",
+            "tragic": "비극적인 엔딩 (파멸, 죽음, 실패)",
+            "neutral": "중립적인 엔딩 (무난한 결말, 큰 변화 없음)",
+            "open": "열린 결말 (해석의 여지, 미완의 이야기)",
+            "bad": "나쁜 엔딩 (불행한 결말, 손실)",
+            "bittersweet": "씁쓸한 엔딩 (희생을 통한 성공, 달콤쓴 결말)"
+        }
+
+        for ending_type, count in ending_config.items():
+            if count > 0:
+                desc = type_descriptions.get(ending_type, ending_type)
+                ending_requirements.append(f"- {desc}: {count}개")
+
+        ending_requirements_str = "\n".join(ending_requirements)
+
+        prompt = f"""선택된 게이지의 최종 누적 수치에 따라 도달할 수 있는 최종 엔딩을 설계하세요.
 
 [소설 요약]
 {novel_summary}
@@ -182,8 +221,11 @@ class InteractiveStoryDirector:
 [게이지 시스템]
 {gauges_info}
 
-[추가 요청사항]
-{user_request if user_request else "다양한 타입의 엔딩을 포함해주세요."} 
+[엔딩 타입별 요구사항]
+다음 타입과 개수에 맞춰 엔딩을 생성해주세요:
+{ending_requirements_str}
+
+총 {total_endings}개의 엔딩을 생성해야 합니다. 
 
 [중요]
 - 이 엔딩들은 여러 에피소드를 거친 후 누적된 게이지 값으로 결정됩니다.
@@ -368,7 +410,10 @@ class InteractiveStoryDirector:
 
 [중요]
 - 각 엔딩에서만 게이지가 변화합니다
-- 게이지 변화량은 -20 ~ +20 범위
+- 게이지 변화량은 엔딩의 중요도와 극적 효과에 따라 자유롭게 설정하세요:
+  - 작은 영향: -10 ~ +10
+  - 보통 영향: -20 ~ +20
+  - 큰 영향 (극적인 엔딩): -30 ~ +30
 - condition은 태그 점수 기반 조건식으로 작성 (예: "cooperative >= 2", "trusting > doubtful")
 
 [요구사항]
@@ -459,11 +504,11 @@ class InteractiveStoryDirector:
 
         app = workflow.compile()
 
-        # 초기 게이지 상태 설정 (모든 게이지 50에서 시작)
+        # 초기 게이지 상태 설정 (AI가 제안한 initial_value 사용, 없으면 50)
         initial_gauges = {}
         for gauge in context.get("gauges", []):
             gauge_id = gauge.get("id", gauge.get("name", "unknown"))
-            initial_gauges[gauge_id] = 50
+            initial_gauges[gauge_id] = gauge.get("initial_value", 50)
 
         # 초기 상태 주입
         initial_state: StoryGenerationState = {

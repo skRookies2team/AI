@@ -15,7 +15,9 @@ async def main_flow(
     novel_text: str,
     selected_gauge_ids: List[str],
     num_episodes: int = 4,
-    max_depth: int = 3
+    max_depth: int = 3,
+    ending_config: Optional[Dict[str, int]] = None,
+    num_episode_endings: int = 3
 ) -> Dict:
     """
     에피소드 기반 인터랙티브 스토리 생성 파이프라인 (API용)
@@ -26,6 +28,10 @@ async def main_flow(
         selected_gauge_ids: 선택된 게이지 ID 리스트 (2개)
         num_episodes: 에피소드 개수 (기본값: 4)
         max_depth: 에피소드별 트리 최대 깊이 (기본값: 3, 범위: 2~5)
+        ending_config: 최종 엔딩 타입별 개수 설정
+            예: {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+            지원 타입: happy, tragic, neutral, open, bad, bittersweet
+        num_episode_endings: 에피소드별 엔딩 개수 (기본값: 3)
 
     Returns:
         생성된 에피소드 리스트 (각 에피소드에 노드와 엔딩 포함)
@@ -76,11 +82,14 @@ async def main_flow(
     # ========================================
     # 4단계: 최종 엔딩 설계 (게이지 누적 기반)
     # ========================================
-    print("\n🏁 [4단계] 최종 엔딩 설계 중...")
+    if ending_config is None:
+        ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+    total_endings = sum(ending_config.values())
+    print(f"\n🏁 [4단계] 최종 엔딩 설계 중 ({total_endings}개)...")
     final_endings = await director.design_final_endings(
         novel_summary,
         selected_gauges,
-        "다양한 결말을 포함해주세요 (해피엔딩, 비극, 열린 결말 등)"
+        ending_config=ending_config
     )
     print(f"  ✅ {len(final_endings)}개의 최종 엔딩 설계 완료")
     for e in final_endings:
@@ -124,7 +133,7 @@ async def main_flow(
         episode_nodes = await director.generate_full_tree(context, max_depth=max_depth)
 
         # 에피소드 엔딩 설계
-        episode_endings = await director.design_episode_endings(ep_template, selected_gauges, num_endings=3)
+        episode_endings = await director.design_episode_endings(ep_template, selected_gauges, num_endings=num_episode_endings)
 
         # 완성된 에피소드 조립
         completed_episode: Episode = {
@@ -294,13 +303,57 @@ if __name__ == "__main__":
             except ValueError:
                 print("    ⚠️ 기본값 3 사용")
 
+            # 엔딩 타입별 개수 설정
+            print("\n🏁 최종 엔딩 타입별 개수 설정")
+            print("  지원 타입: happy(행복), tragic(비극), neutral(중립), open(열린결말), bad(나쁜), bittersweet(씁쓸)")
+            print("  (엔터를 누르면 기본값 사용: happy=2, tragic=1, neutral=1, open=1)")
+
+            ending_config = {}
+            ending_types = [
+                ("happy", "행복한 엔딩"),
+                ("tragic", "비극적인 엔딩"),
+                ("neutral", "중립적인 엔딩"),
+                ("open", "열린 결말"),
+                ("bad", "나쁜 엔딩"),
+                ("bittersweet", "씁쓸한 엔딩")
+            ]
+
+            use_default = input("  → 기본값 사용? (y/n, 기본값 y): ").strip().lower()
+            if use_default != 'n':
+                ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+                print("    ✓ 기본값 사용: happy=2, tragic=1, neutral=1, open=1")
+            else:
+                for etype, ename in ending_types:
+                    try:
+                        count = input(f"    → {ename} ({etype}) 개수 (기본값 0): ").strip()
+                        if count:
+                            ending_config[etype] = int(count)
+                    except ValueError:
+                        pass
+
+                if not ending_config or sum(ending_config.values()) == 0:
+                    ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+                    print("    ⚠️ 유효한 입력 없음, 기본값 사용")
+
+            print(f"    📌 엔딩 설정: {ending_config}")
+
+            num_episode_endings = 3
+            try:
+                ep_ending_input = input("  → 에피소드별 엔딩 개수 (기본값 3): ").strip()
+                if ep_ending_input:
+                    num_episode_endings = int(ep_ending_input)
+            except ValueError:
+                print("    ⚠️ 기본값 3 사용")
+
             # 스토리 생성
             result = await main_flow(
                 api_key=API_KEY,
                 novel_text=novel_text,
                 selected_gauge_ids=selected_gauge_ids,
                 num_episodes=num_episodes,
-                max_depth=max_depth
+                max_depth=max_depth,
+                ending_config=ending_config,
+                num_episode_endings=num_episode_endings
             )
 
             # 결과 요약 출력

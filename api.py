@@ -35,11 +35,23 @@ class GaugeRequest(BaseModel):
     novel_text: str
 
 
+class EndingConfig(BaseModel):
+    """최종 엔딩 타입별 개수 설정"""
+    happy: int = 2          # 행복한 엔딩
+    tragic: int = 1         # 비극적인 엔딩
+    neutral: int = 1        # 중립적인 엔딩
+    open: int = 1           # 열린 결말
+    bad: int = 0            # 나쁜 엔딩
+    bittersweet: int = 0    # 씁쓸한 엔딩
+
+
 class GenerateRequest(BaseModel):
     novel_text: str
     selected_gauge_ids: List[str]  # 선택한 게이지 ID 2개
     num_episodes: int = 3
     max_depth: int = 3  # 2~5
+    ending_config: Optional[EndingConfig] = None  # 엔딩 타입별 개수
+    num_episode_endings: int = 3  # 에피소드별 엔딩 개수
 
 
 class GaugeInfo(BaseModel):
@@ -138,12 +150,28 @@ async def generate_story(request: GenerateRequest):
         raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
 
     try:
+        # ending_config 변환
+        ending_config_dict = None
+        if request.ending_config:
+            ending_config_dict = {
+                "happy": request.ending_config.happy,
+                "tragic": request.ending_config.tragic,
+                "neutral": request.ending_config.neutral,
+                "open": request.ending_config.open,
+                "bad": request.ending_config.bad,
+                "bittersweet": request.ending_config.bittersweet
+            }
+            # 0인 항목 제거
+            ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
+
         result = await main_flow(
             api_key=API_KEY,
             novel_text=request.novel_text,
             selected_gauge_ids=request.selected_gauge_ids,
             num_episodes=request.num_episodes,
-            max_depth=request.max_depth
+            max_depth=request.max_depth,
+            ending_config=ending_config_dict,
+            num_episode_endings=request.num_episode_endings
         )
         return result
     except Exception as e:
@@ -155,7 +183,9 @@ async def generate_story_from_file(
     file: UploadFile = File(...),
     selected_gauge_ids: str = Form(...),  # 쉼표로 구분된 ID들
     num_episodes: int = Form(3),
-    max_depth: int = Form(3)
+    max_depth: int = Form(3),
+    ending_config: str = Form("happy:2,tragic:1,neutral:1,open:1"),  # "타입:개수" 형식
+    num_episode_endings: int = Form(3)
 ):
     """
     파일 업로드로 인터랙티브 스토리 생성
@@ -184,12 +214,21 @@ async def generate_story_from_file(
         content = await file.read()
         novel_text = content.decode('utf-8')
 
+        # ending_config 파싱 ("happy:2,tragic:1" 형식)
+        ending_config_dict = {}
+        for item in ending_config.split(','):
+            if ':' in item:
+                etype, count = item.strip().split(':')
+                ending_config_dict[etype.strip()] = int(count.strip())
+
         result = await main_flow(
             api_key=API_KEY,
             novel_text=novel_text,
             selected_gauge_ids=gauge_ids,
             num_episodes=num_episodes,
-            max_depth=max_depth
+            max_depth=max_depth,
+            ending_config=ending_config_dict if ending_config_dict else None,
+            num_episode_endings=num_episode_endings
         )
         return result
     except UnicodeDecodeError:
