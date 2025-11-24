@@ -237,10 +237,25 @@ if __name__ == "__main__":
                 if not file_path:
                     print("    ⚠️ 파일 경로를 입력하세요.")
                     continue
+
+                # 여러 인코딩 시도
+                encodings = ['utf-8', 'cp949', 'euc-kr', 'utf-16']
+                novel_text = None
+
                 try:
-                    with open(file_path, 'r', encoding='utf-8') as f:
-                        novel_text = f.read()
-                    print(f"  ✅ 파일 로드 완료: {len(novel_text):,}자")
+                    for encoding in encodings:
+                        try:
+                            with open(file_path, 'r', encoding=encoding) as f:
+                                novel_text = f.read()
+                            print(f"  ✅ 파일 로드 완료 ({encoding}): {len(novel_text):,}자")
+                            break
+                        except (UnicodeDecodeError, UnicodeError):
+                            continue
+
+                    if novel_text is None:
+                        print(f"    ❌ 지원되는 인코딩으로 파일을 읽을 수 없습니다.")
+                        continue
+
                     break
                 except FileNotFoundError:
                     print(f"    ❌ 파일을 찾을 수 없습니다: {file_path}")
