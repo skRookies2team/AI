@@ -860,15 +860,23 @@ class InteractiveStoryDirector:
             # ```json ... ``` 블록 추출
             json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
             if json_match:
-                return json.loads(json_match.group(1))
+                json_str = json_match.group(1).strip()
+                return json.loads(json_str)
 
-            # { } 블록 직접 추출
+            # { } 블록 직접 추출 (가장 큰 JSON 객체 찾기)
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:
-                return json.loads(json_match.group(0))
+                json_str = json_match.group(0).strip()
+                return json.loads(json_str)
+
+            # 직접 파싱 시도
+            return json.loads(content.strip())
 
         except json.JSONDecodeError as e:
             print(f"  ⚠️ JSON 파싱 실패: {e}")
+            # 디버깅을 위해 응답의 일부 출력
+            preview = content[:300] if len(content) > 300 else content
+            print(f"  📄 응답 미리보기: {preview}")
 
         return {}
 
