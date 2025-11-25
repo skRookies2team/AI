@@ -21,3 +21,6 @@ episode_story.json
 story_export.md
 story_export.html
 story_game.json
+
+# Gemini CLI
+.claude/

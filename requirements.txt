@@ -6,3 +6,4 @@ langgraph
 fastapi
 uvicorn[standard]
 python-multipart
+boto3==1.34.0
