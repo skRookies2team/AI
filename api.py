@@ -1,10 +1,12 @@
 import os
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import boto3
+import requests
+import json
 from botocore.exceptions import ClientError
 
 from main import main_flow, get_gauges
@@ -38,27 +40,18 @@ def download_from_s3(file_key: str, bucket: str = None) -> str:
         raise HTTPException(status_code=400, detail="파일 인코딩 오류. UTF-8 파일을 사용하세요.")
 
 
-def upload_to_s3(data: dict, file_key: str, bucket: str = None) -> str:
-    """결과를 JSON으로 S3에 업로드"""
-    if bucket is None:
-        bucket = os.getenv('AWS_S3_BUCKET', 'story-game-bucket')
-
+def upload_to_presigned_url(url: str, data: Dict):
+    """미리 서명된 URL로 JSON 데이터를 PUT 요청으로 업로드합니다."""
     try:
-        import json
-        json_content = json.dumps(data, ensure_ascii=False, indent=2)
-
-        s3_client.put_object(
-            Bucket=bucket,
-            Key=file_key,
-            Body=json_content.encode('utf-8'),
-            ContentType='application/json',
-            ContentEncoding='utf-8'
+        response = requests.put(
+            url,
+            data=json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8'),
+            headers={'Content-Type': 'application/json'}
         )
-        return file_key
-    except ClientError as e:
-        raise HTTPException(status_code=500, detail=f"S3 upload error: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
+        response.raise_for_status()  # 2xx 이외의 상태 코드에 대해 예외 발생
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"Failed to upload result to S3: {str(e)}")
+
 
 app = FastAPI(
     title="Interactive Story Engine API",
@@ -113,10 +106,10 @@ class AnalyzeFromS3Request(BaseModel):
 
 
 class GenerateFromS3Request(BaseModel):
-    """S3에서 소설 파일을 다운로드하여 스토리 생성"""
-    file_key: Optional[str] = None
+    """S3에서 소설 파일을 다운로드하여 스토리 생성하고 결과를 Pre-signed URL에 업로드"""
+    file_key: str
+    s3_upload_url: str  # 결과를 업로드할 Pre-signed URL
     bucket: Optional[str] = "story-game-bucket"
-    novel_text: Optional[str] = None  # S3가 아닌 경우 사용
     selected_gauge_ids: List[str]
     num_episodes: int = 3
     max_depth: int = 3
@@ -313,19 +306,6 @@ async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
     S3에서 소설 파일을 다운로드하여 분석
 
     백엔드가 S3에 업로드한 파일을 fileKey로 받아서 분석합니다.
-
-    Request:
-    {
-        "file_key": "uploads/abc123_novel.txt",
-        "bucket": "story-game-bucket"
-    }
-
-    Response:
-    {
-        "summary": "소설 요약 500자...",
-        "characters": [...],
-        "gauges": [...]
-    }
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -347,41 +327,10 @@ async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
 @app.post("/generate-from-s3")
 async def generate_story_from_s3(request: GenerateFromS3Request):
     """
-    S3에서 소설 파일을 다운로드하여 스토리 생성 (결과도 S3에 저장)
+    S3에서 소설 파일을 다운로드하여 스토리 생성 (결과는 Pre-signed URL로 업로드)
 
-    백엔드가 S3에 업로드한 파일을 fileKey로 받아서 스토리를 생성합니다.
-    생성된 대용량 결과는 S3에 저장하고, resultKey만 반환합니다. (최적화)
-
-    Request:
-    {
-        "file_key": "uploads/abc123_novel.txt",
-        "bucket": "story-game-bucket",
-        "selected_gauge_ids": ["civilization", "unity"],
-        "num_episodes": 3,
-        "max_depth": 3,
-        "ending_config": {
-            "happy": 2,
-            "tragic": 1,
-            "neutral": 1,
-            "open": 1,
-            "bad": 0
-        },
-        "num_episode_endings": 3
-    }
-
-    Response (메타데이터만 반환, 전체 데이터는 S3에서 다운로드):
-    {
-        "status": "success",
-        "message": "Story generated successfully",
-        "result_key": "results/story_abc123_20250125_143022.json",
-        "metadata": {
-            "total_episodes": 3,
-            "total_nodes": 45,
-            "gauges": ["문명도", "단결력"],
-            "character_count": 5
-        },
-        "bucket": "story-game-bucket"
-    }
+    백엔드가 S3에 업로드한 파일의 fileKey와 결과 업로드용 Pre-signed URL을 받습니다.
+    생성된 대용량 결과는 전달받은 URL을 통해 S3에 직접 업로드합니다.
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -389,21 +338,13 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
     # 유효성 검사
     if len(request.selected_gauge_ids) < 2:
         raise HTTPException(status_code=400, detail="게이지 ID를 2개 이상 선택해야 합니다.")
-
     if not (2 <= request.max_depth <= 5):
         raise HTTPException(status_code=400, detail="트리 깊이는 2~5 사이여야 합니다.")
-
     if request.num_episodes < 1:
         raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
 
     try:
-        # S3에서 파일 다운로드 (file_key가 있으면 S3, 없으면 novel_text 사용)
-        if request.file_key:
-            novel_text = download_from_s3(request.file_key, request.bucket)
-        elif request.novel_text:
-            novel_text = request.novel_text
-        else:
-            raise HTTPException(status_code=400, detail="Either file_key or novel_text is required")
+        novel_text = download_from_s3(request.file_key, request.bucket)
 
         # ending_config 변환
         ending_config_dict = None
@@ -416,7 +357,6 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
                 "bad": request.ending_config.bad,
                 "bittersweet": request.ending_config.bittersweet
             }
-            # 0인 항목 제거
             ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
 
         # 기존 생성 로직 재사용
@@ -430,24 +370,13 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
             num_episode_endings=request.num_episode_endings
         )
 
-        # 결과를 S3에 업로드 (대용량 데이터 최적화)
-        from datetime import datetime
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        # 결과를 Pre-signed URL에 업로드
+        upload_to_presigned_url(request.s3_upload_url, story_data)
 
-        # file_key에서 원본 파일명 추출 (예: uploads/abc123.txt -> abc123)
-        base_name = request.file_key.split('/')[-1].replace('.txt', '') if request.file_key else 'story'
-        result_key = f"results/story_{base_name}_{timestamp}.json"
-
-        # S3에 업로드
-        upload_to_s3(story_data, result_key, request.bucket)
-
-        # 메타데이터만 반환 (전체 데이터는 S3에서 다운로드)
+        # 백엔드에는 성공 여부만 반환
         return {
             "status": "success",
-            "message": "Story generated successfully",
-            "result_key": result_key,
-            "metadata": story_data.get("metadata", {}),
-            "bucket": request.bucket or os.getenv('AWS_S3_BUCKET', 'story-game-bucket')
+            "message": f"Story data successfully uploaded using pre-signed URL."
         }
 
     except HTTPException:
@@ -456,8 +385,6 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
         return {
             "status": "error",
             "message": str(e),
-            "result_key": None,
-            "metadata": None
         }
 
 
