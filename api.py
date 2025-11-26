@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 import boto3
 import requests
+import httpx
 import json
 from botocore.exceptions import ClientError
 
@@ -40,17 +41,42 @@ def download_from_s3(file_key: str, bucket: str = None) -> str:
         raise HTTPException(status_code=400, detail="파일 인코딩 오류. UTF-8 파일을 사용하세요.")
 
 
-def upload_to_presigned_url(url: str, data: Dict):
-    """미리 서명된 URL로 JSON 데이터를 PUT 요청으로 업로드합니다."""
+async def upload_to_presigned_url(url: str, data: Dict):
+    """미리 서명된 URL로 JSON 데이터를 PUT 요청으로 업로드합니다 (비동기)."""
     try:
-        response = requests.put(
-            url,
-            data=json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8'),
-            headers={'Content-Type': 'application/json'}
-        )
-        response.raise_for_status()  # 2xx 이외의 상태 코드에 대해 예외 발생
-    except requests.exceptions.RequestException as e:
+        async with httpx.AsyncClient(timeout=300.0) as client:  # 5분 타임아웃
+            response = await client.put(
+                url,
+                content=json.dumps(data, ensure_ascii=False, indent=2).encode('utf-8'),
+                headers={'Content-Type': 'application/json'}
+            )
+            response.raise_for_status()  # 2xx 이외의 상태 코드에 대해 예외 발생
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=500, detail=f"S3 upload failed with status {e.response.status_code}: {str(e)}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="S3 upload timeout (exceeded 5 minutes)")
+    except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to upload result to S3: {str(e)}")
+
+
+def extract_metadata(story_data: Dict) -> Dict:
+    """스토리 데이터에서 메타데이터를 추출합니다."""
+    total_nodes = 0
+    total_episodes = len(story_data.get("episodes", []))
+
+    # 모든 에피소드의 노드 수 계산
+    for episode in story_data.get("episodes", []):
+        if "nodes" in episode:
+            total_nodes += len(episode["nodes"])
+
+    # 게이지 수 계산
+    total_gauges = len(story_data.get("context", {}).get("gauges", []))
+
+    return {
+        "total_episodes": total_episodes,
+        "total_nodes": total_nodes,
+        "total_gauges": total_gauges
+    }
 
 
 app = FastAPI(
@@ -108,7 +134,8 @@ class AnalyzeFromS3Request(BaseModel):
 class GenerateFromS3Request(BaseModel):
     """S3에서 소설 파일을 다운로드하여 스토리 생성하고 결과를 Pre-signed URL에 업로드"""
     file_key: str
-    s3_upload_url: str  # 결과를 업로드할 Pre-signed URL
+    s3_upload_url: Optional[str] = None  # 결과를 업로드할 Pre-signed URL (Optional)
+    s3_file_key: Optional[str] = None  # S3에 저장될 파일 경로
     bucket: Optional[str] = "story-game-bucket"
     selected_gauge_ids: List[str]
     num_episodes: int = 3
@@ -327,10 +354,14 @@ async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
 @app.post("/generate-from-s3")
 async def generate_story_from_s3(request: GenerateFromS3Request):
     """
-    S3에서 소설 파일을 다운로드하여 스토리 생성 (결과는 Pre-signed URL로 업로드)
+    S3에서 소설 파일을 다운로드하여 스토리 생성
 
-    백엔드가 S3에 업로드한 파일의 fileKey와 결과 업로드용 Pre-signed URL을 받습니다.
-    생성된 대용량 결과는 전달받은 URL을 통해 S3에 직접 업로드합니다.
+    s3_upload_url이 제공되면:
+    - 결과를 Pre-signed URL로 S3에 직접 업로드
+    - 메타데이터만 반환 (file_key, metadata)
+
+    s3_upload_url이 없으면:
+    - 전체 스토리 데이터 반환 (기존 방식)
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -370,22 +401,30 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
             num_episode_endings=request.num_episode_endings
         )
 
-        # 결과를 Pre-signed URL에 업로드
-        upload_to_presigned_url(request.s3_upload_url, story_data)
+        # Pre-signed URL이 있으면 S3에 업로드하고 메타데이터만 반환
+        if request.s3_upload_url:
+            await upload_to_presigned_url(request.s3_upload_url, story_data)
 
-        # 백엔드에는 성공 여부만 반환
-        return {
-            "status": "success",
-            "message": f"Story data successfully uploaded using pre-signed URL."
-        }
+            # 메타데이터 추출
+            metadata = extract_metadata(story_data)
+
+            # 메타데이터만 반환 (경량 응답)
+            return {
+                "status": "success",
+                "file_key": request.s3_file_key or "unknown",
+                "metadata": metadata
+            }
+        else:
+            # Pre-signed URL이 없으면 전체 데이터 반환 (기존 방식)
+            return {
+                "status": "success",
+                "data": story_data
+            }
 
     except HTTPException:
         raise
     except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-        }
+        raise HTTPException(status_code=500, detail=f"Story generation failed: {str(e)}")
 
 
 # ============================================
