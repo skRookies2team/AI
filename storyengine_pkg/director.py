@@ -181,39 +181,42 @@ class InteractiveStoryDirector:
                 예: {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
                 지원 타입: happy, tragic, neutral, open, bad, bittersweet
         """
-        # 기본값 설정
-        if ending_config is None:
-            ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+        try:
+            # 기본값 설정
+            if ending_config is None:
+                ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
 
-        total_endings = sum(ending_config.values())
-        print(f"🏁 최종 엔딩 설계 중 ({total_endings}개)...")
+            total_endings = sum(ending_config.values())
+            print(f"🏁 최종 엔딩 설계 중 ({total_endings}개)...")
+            print(f"  📋 엔딩 구성: {ending_config}")
 
-        # 게이지 정보 포맷팅
-        gauges_detail = []
-        for g in selected_gauges:
-            gauge_str = f"• {g.get('name', '?')} ({g.get('id', '?')}): {g.get('min_label', '?')} (0) ↔ {g.get('max_label', '?')} (100)"
-            gauges_detail.append(gauge_str)
-        gauges_info = "\n".join(gauges_detail)
+            # 게이지 정보 포맷팅
+            gauges_detail = []
+            for g in selected_gauges:
+                gauge_str = f"• {g.get('name', '?')} ({g.get('id', '?')}): {g.get('min_label', '?')} (0) ↔ {g.get('max_label', '?')} (100)"
+                gauges_detail.append(gauge_str)
+            gauges_info = "\n".join(gauges_detail)
+            print(f"  📊 게이지 정보: {len(selected_gauges)}개")
 
-        # 엔딩 타입 요구사항 생성
-        ending_requirements = []
-        type_descriptions = {
-            "happy": "행복한 엔딩 (희망적인 결말, 목표 달성)",
-            "tragic": "비극적인 엔딩 (파멸, 죽음, 실패)",
-            "neutral": "중립적인 엔딩 (무난한 결말, 큰 변화 없음)",
-            "open": "열린 결말 (해석의 여지, 미완의 이야기)",
-            "bad": "나쁜 엔딩 (불행한 결말, 손실)",
-            "bittersweet": "씁쓸한 엔딩 (희생을 통한 성공, 달콤쓴 결말)"
-        }
+            # 엔딩 타입 요구사항 생성
+            ending_requirements = []
+            type_descriptions = {
+                "happy": "행복한 엔딩 (희망적인 결말, 목표 달성)",
+                "tragic": "비극적인 엔딩 (파멸, 죽음, 실패)",
+                "neutral": "중립적인 엔딩 (무난한 결말, 큰 변화 없음)",
+                "open": "열린 결말 (해석의 여지, 미완의 이야기)",
+                "bad": "나쁜 엔딩 (불행한 결말, 손실)",
+                "bittersweet": "씁쓸한 엔딩 (희생을 통한 성공, 달콤쓴 결말)"
+            }
 
-        for ending_type, count in ending_config.items():
-            if count > 0:
-                desc = type_descriptions.get(ending_type, ending_type)
-                ending_requirements.append(f"- {desc}: {count}개")
+            for ending_type, count in ending_config.items():
+                if count > 0:
+                    desc = type_descriptions.get(ending_type, ending_type)
+                    ending_requirements.append(f"- {desc}: {count}개")
 
-        ending_requirements_str = "\n".join(ending_requirements)
+            ending_requirements_str = "\n".join(ending_requirements)
 
-        prompt = f"""선택된 게이지의 최종 누적 수치에 따라 도달할 수 있는 최종 엔딩을 설계하세요.
+            prompt = f"""선택된 게이지의 최종 누적 수치에 따라 도달할 수 있는 최종 엔딩을 설계하세요.
 
 [소설 요약]
 {novel_summary}
@@ -259,24 +262,58 @@ class InteractiveStoryDirector:
         }}
     ]
 }}"""
-        response = await self.llm.ainvoke(prompt)
-        endings = self._parse_json(response.content).get("endings", [])
+            
+            print(f"  🤖 LLM 호출 중... (프롬프트 길이: {len(prompt)}자)")
+            response = await self.llm.ainvoke(prompt)
+            print(f"  ✅ LLM 응답 받음 (응답 길이: {len(response.content)}자)")
+            
+            endings = self._parse_json(response.content).get("endings", [])
+            print(f"  🔍 파싱 결과: {len(endings)}개 엔딩 추출됨")
 
-        # 빈 결과일 경우 기본값 반환
-        if not endings:
-            print("  ⚠️ 최종 엔딩 설계 실패, 기본값 사용")
+            # 빈 결과일 경우 기본값 반환
+            if not endings:
+                print("  ⚠️ 최종 엔딩 설계 실패 (빈 결과), 기본값 사용")
+                print(f"  💬 전체 LLM 응답:\n{response.content[:500]}")
+                return [
+                    {
+                        "id": "ending_default",
+                        "type": "neutral",
+                        "title": "기본 엔딩",
+                        "condition": "default",
+                        "summary": "스토리가 기본적인 결말에 도달합니다."
+                    }
+                ]
+
+            # 각 엔딩 검증
+            for i, ending in enumerate(endings):
+                required_keys = ["id", "type", "title", "condition", "summary"]
+                missing_keys = [k for k in required_keys if k not in ending]
+                if missing_keys:
+                    print(f"  ⚠️ 엔딩 {i+1} 필수 키 누락: {missing_keys}")
+            
+            print(f"  ✅ {len(endings)}개의 최종 엔딩 설계 완료")
+            for i, ending in enumerate(endings):
+                print(f"    • [{ending.get('type', '?')}] {ending.get('title', '?')}")
+                print(f"      조건: {ending.get('condition', '?')}")
+            
+            return endings
+            
+        except Exception as e:
+            print(f"  ❌ 최종 엔딩 설계 중 예외 발생: {type(e).__name__}: {e}")
+            import traceback
+            print(f"  📍 스택 트레이스:\n{traceback.format_exc()}")
+            
+            # 예외 발생 시에도 기본값 반환
+            print(f"  🔄 예외로 인한 기본값 반환")
             return [
                 {
                     "id": "ending_default",
                     "type": "neutral",
-                    "title": "기본 엔딩",
+                    "title": "기본 엔딩 (예외 발생)",
                     "condition": "default",
                     "summary": "스토리가 기본적인 결말에 도달합니다."
                 }
             ]
-
-        print(f"  ✅ {len(endings)}개의 최종 엔딩 설계 완료")
-        return endings
 
     # --------------------------------------------------------------------------
     # [5단계] 에피소드 분할 (Split into Episodes)
@@ -349,11 +386,13 @@ class InteractiveStoryDirector:
     # --------------------------------------------------------------------------
     async def generate_episode_intro(self, episode: Dict, characters: List[Character], novel_summary: str) -> str:
         print(f"  🎬 '{episode.get('title', '?')}' 도입부 생성 중...")
+        
+        try:
+            # 캐릭터 정보
+            char_names = [c.get('name', '이름없음') for c in characters]
+            print(f"    👥 캐릭터 수: {len(char_names)}")
 
-        # 캐릭터 정보
-        char_names = [c.get('name', '이름없음') for c in characters]
-
-        prompt = f"""다음 에피소드의 도입부를 작성해주세요.
+            prompt = f"""다음 에피소드의 도입부를 작성해주세요.
 플레이어가 첫 번째 선택지를 만나기 전에 읽게 되는 스토리입니다.
 
 [소설 배경]
@@ -379,22 +418,37 @@ class InteractiveStoryDirector:
 
 도입부 텍스트만 작성해주세요 (JSON 아님):"""
 
-        response = await self.llm.ainvoke(prompt)
-        intro_text = response.content.strip()
-
-        print(f"    ✅ 도입부 생성 완료 ({len(intro_text)}자)")
-        return intro_text
+            print(f"    🤖 LLM 호출 중...")
+            response = await self.llm.ainvoke(prompt)
+            intro_text = response.content.strip()
+            
+            print(f"    ✅ 도입부 생성 완료 ({len(intro_text)}자)")
+            
+            if len(intro_text) < 100:
+                print(f"    ⚠️ 도입부가 너무 짧습니다: {intro_text[:100]}")
+            
+            return intro_text
+            
+        except Exception as e:
+            print(f"    ❌ 도입부 생성 중 예외 발생: {type(e).__name__}: {e}")
+            import traceback
+            print(f"    📍 스택 트레이스:\n{traceback.format_exc()}")
+            
+            # 예외 발생 시 기본 도입부 반환
+            return f"[{episode.get('title', '에피소드')}]\n\n에피소드가 시작됩니다..."
 
     # --------------------------------------------------------------------------
     # [6단계] 에피소드 엔딩 설계 (Design Episode Endings)
     # --------------------------------------------------------------------------
     async def design_episode_endings(self, episode: Dict, selected_gauges: List[Gauge], num_endings: int = 3) -> List[EpisodeEnding]:
         print(f"  🎯 '{episode.get('title', '?')}' 에피소드 엔딩 설계 중...")
+        
+        try:
+            # 게이지 정보 포맷팅
+            gauges_info = self._format_gauges(selected_gauges)
+            print(f"    📊 게이지 정보: {len(selected_gauges)}개")
 
-        # 게이지 정보 포맷팅
-        gauges_info = self._format_gauges(selected_gauges)
-
-        prompt = f"""이 에피소드의 {num_endings}가지 엔딩을 설계하세요. 각 엔딩은 플레이어의 선택 태그 누적에 따라 도달하며, 게이지에 영향을 줍니다.
+            prompt = f"""이 에피소드의 {num_endings}가지 엔딩을 설계하세요. 각 엔딩은 플레이어의 선택 태그 누적에 따라 도달하며, 게이지에 영향을 줍니다.
 
 [에피소드 정보]
 - 제목: {episode.get('title', '?')}
@@ -450,23 +504,61 @@ class InteractiveStoryDirector:
         }}
     ]
 }}"""
-        response = await self.llm.ainvoke(prompt)
-        endings = self._parse_json(response.content).get("endings", [])
+            
+            print(f"    🤖 LLM 호출 중... (프롬프트 길이: {len(prompt)}자)")
+            response = await self.llm.ainvoke(prompt)
+            print(f"    ✅ LLM 응답 받음 (응답 길이: {len(response.content)}자)")
+            
+            # 응답 내용 미리보기
+            response_preview = response.content[:200] if len(response.content) > 200 else response.content
+            print(f"    📝 응답 미리보기: {response_preview}...")
+            
+            endings = self._parse_json(response.content).get("endings", [])
+            print(f"    🔍 파싱 결과: {len(endings)}개 엔딩 추출됨")
 
-        if not endings:
-            print(f"    ⚠️ 에피소드 엔딩 설계 실패, 기본값 사용")
+            if not endings:
+                print(f"    ⚠️ 에피소드 엔딩 설계 실패 (빈 결과), 기본값 사용")
+                print(f"    💬 전체 LLM 응답:\n{response.content[:500]}")
+                return [
+                    {
+                        "id": f"{episode.get('id', 'ep')}_ending_default",
+                        "title": "기본 엔딩",
+                        "condition": "default",
+                        "text": "에피소드가 끝났습니다.",
+                        "gauge_changes": {}
+                    }
+                ]
+
+            # 각 엔딩 검증
+            for i, ending in enumerate(endings):
+                if not all(key in ending for key in ["id", "title", "condition", "text"]):
+                    print(f"    ⚠️ 엔딩 {i+1} 필수 키 누락: {ending.keys()}")
+                if "gauge_changes" not in ending:
+                    print(f"    ⚠️ 엔딩 {i+1} gauge_changes 누락, 빈 dict 추가")
+                    ending["gauge_changes"] = {}
+            
+            print(f"    ✅ {len(endings)}개 엔딩 설계 완료")
+            for i, ending in enumerate(endings):
+                print(f"      • [{i+1}] {ending.get('title', '?')} (gauge_changes: {list(ending.get('gauge_changes', {}).keys())})")
+            
+            return endings
+            
+        except Exception as e:
+            print(f"    ❌ 에피소드 엔딩 설계 중 예외 발생: {type(e).__name__}: {e}")
+            import traceback
+            print(f"    📍 스택 트레이스:\n{traceback.format_exc()}")
+            
+            # 예외 발생 시에도 기본값 반환
+            print(f"    🔄 예외로 인한 기본값 반환")
             return [
                 {
                     "id": f"{episode.get('id', 'ep')}_ending_default",
-                    "title": "기본 엔딩",
-                    "condition": "기본",
+                    "title": "기본 엔딩 (예외 발생)",
+                    "condition": "default",
                     "text": "에피소드가 끝났습니다.",
-                    "gauge_changes": {{}}
+                    "gauge_changes": {}
                 }
             ]
-
-        print(f"    ✅ {len(endings)}개 엔딩 설계 완료")
-        return endings
 
     # --------------------------------------------------------------------------
     # [5단계] 스토리 트리 생성 (Generate Story Tree - LangGraph Engine)
@@ -849,35 +941,67 @@ class InteractiveStoryDirector:
     # 유틸리티
     def _parse_json(self, content: str) -> Dict:
         """LLM 응답에서 JSON을 안전하게 파싱"""
+        print(f"    🔧 JSON 파싱 시작 (내용 길이: {len(content)}자)")
+        
         try:
             # 먼저 LangChain 파서 시도
-            return self.json_parser.parse(content)
-        except Exception:
-            pass
+            print(f"    🔧 LangChain 파서 시도...")
+            result = self.json_parser.parse(content)
+            print(f"    ✅ LangChain 파서 성공!")
+            return result
+        except Exception as e:
+            print(f"    ⚠️ LangChain 파서 실패: {type(e).__name__}: {e}")
 
         # 직접 JSON 추출 시도
         try:
             # ```json ... ``` 블록 추출
+            print(f"    🔧 코드 블록 패턴 탐색...")
             json_match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', content)
             if json_match:
                 json_str = json_match.group(1).strip()
-                return json.loads(json_str)
+                print(f"    ✅ 코드 블록 발견 (길이: {len(json_str)}자)")
+                result = json.loads(json_str)
+                print(f"    ✅ JSON 파싱 성공 (키: {list(result.keys())})")
+                return result
 
             # { } 블록 직접 추출 (가장 큰 JSON 객체 찾기)
+            print(f"    🔧 중괄호 블록 탐색...")
             json_match = re.search(r'\{[\s\S]*\}', content)
             if json_match:
                 json_str = json_match.group(0).strip()
-                return json.loads(json_str)
+                print(f"    ✅ 중괄호 블록 발견 (길이: {len(json_str)}자)")
+                result = json.loads(json_str)
+                print(f"    ✅ JSON 파싱 성공 (키: {list(result.keys())})")
+                return result
 
             # 직접 파싱 시도
-            return json.loads(content.strip())
+            print(f"    🔧 직접 파싱 시도...")
+            result = json.loads(content.strip())
+            print(f"    ✅ 직접 파싱 성공 (키: {list(result.keys())})")
+            return result
 
         except json.JSONDecodeError as e:
-            print(f"  ⚠️ JSON 파싱 실패: {e}")
+            print(f"  ❌ JSON 파싱 실패: {e}")
+            print(f"     위치: line {e.lineno}, column {e.colno}")
+            print(f"     메시지: {e.msg}")
+            
             # 디버깅을 위해 응답의 일부 출력
-            preview = content[:300] if len(content) > 300 else content
-            print(f"  📄 응답 미리보기: {preview}")
+            preview = content[:500] if len(content) > 500 else content
+            print(f"  📄 응답 미리보기 (처음 500자):\n{preview}")
+            
+            # 마지막 부분도 확인
+            if len(content) > 500:
+                tail = content[-500:]
+                print(f"  📄 응답 끝부분 (마지막 500자):\n{tail}")
+            
+            # JSON이 잘렸는지 확인
+            if not content.strip().endswith('}'):
+                print(f"  ⚠️ JSON이 불완전합니다. 마지막 문자: '{content.strip()[-10:]}'")
+        
+        except Exception as e:
+            print(f"  ❌ 예상치 못한 오류: {type(e).__name__}: {e}")
 
+        print(f"  ⚠️ 모든 파싱 시도 실패, 빈 dict 반환")
         return {}
 
     async def _generate_summary(self, novel_text: str) -> str:
