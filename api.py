@@ -394,7 +394,9 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
         raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
 
     try:
+        print(f"📥 S3에서 파일 다운로드 시작: {request.file_key}")
         novel_text = download_from_s3(request.file_key, request.bucket)
+        print(f"✅ 다운로드 완료 (텍스트 길이: {len(novel_text)}자)")
 
         # ending_config 변환
         ending_config_dict = None
@@ -410,6 +412,7 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
             ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
 
         # 기존 생성 로직 재사용
+        print(f"🎬 스토리 생성 시작 (에피소드: {request.num_episodes}, 깊이: {request.max_depth})")
         story_data = await main_flow(
             api_key=API_KEY,
             novel_text=novel_text,
@@ -419,10 +422,13 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
             ending_config=ending_config_dict,
             num_episode_endings=request.num_episode_endings
         )
+        print(f"✅ 스토리 생성 완료")
 
         # Pre-signed URL이 있으면 S3에 업로드하고 메타데이터만 반환
         if request.s3_upload_url:
+            print(f"📤 S3에 업로드 시작")
             await upload_to_presigned_url(request.s3_upload_url, story_data)
+            print(f"✅ S3 업로드 완료")
 
             # 메타데이터 추출
             metadata = extract_metadata(story_data)
@@ -443,7 +449,10 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Story generation failed: {str(e)}")
+        import traceback
+        error_detail = f"Story generation failed: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ 오류 발생:\n{error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 
 # ============================================
