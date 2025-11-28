@@ -128,6 +128,8 @@ class AnalyzeFromS3Request(BaseModel):
     """S3에서 소설 파일을 다운로드하여 분석"""
     file_key: str
     bucket: Optional[str] = "story-game-bucket"
+    s3_upload_url: Optional[str] = None  # 결과를 업로드할 Pre-signed URL
+    result_file_key: Optional[str] = None  # 반환할 파일 키
     novel_text: Optional[str] = None  # S3 실패 시 fallback용
 
 
@@ -327,22 +329,39 @@ async def generate_story_from_file(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/analyze-from-s3", response_model=GaugeResponse)
+@app.post("/analyze-from-s3")
 async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
     """
     S3에서 소설 파일을 다운로드하여 분석
 
     백엔드가 S3에 업로드한 파일을 fileKey로 받아서 분석합니다.
+
+    s3_upload_url이 제공되면:
+    - 분석 결과를 Pre-signed URL로 S3에 업로드
+    - fileKey만 반환
+
+    s3_upload_url이 없으면:
+    - 전체 분석 결과 반환 (기존 방식)
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
 
     try:
-        # S3에서 파일 다운로드
+        # 1. S3에서 소설 다운로드
         novel_text = download_from_s3(request.file_key, request.bucket)
 
-        # 기존 분석 로직 재사용
+        # 2. 분석 (요약, 캐릭터, 게이지)
         result = await get_gauges(API_KEY, novel_text)
+
+        # 3. Pre-signed URL이 있으면 S3에 업로드하고 fileKey만 반환
+        if request.s3_upload_url:
+            # 4. S3에 업로드 (Pre-signed URL 사용)
+            await upload_to_presigned_url(request.s3_upload_url, result)
+
+            # 5. fileKey만 반환
+            return {"file_key": request.result_file_key or request.file_key}
+
+        # Pre-signed URL이 없으면 전체 결과 반환 (기존 방식)
         return result
 
     except HTTPException:
