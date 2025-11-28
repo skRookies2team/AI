@@ -1,0 +1,11 @@
+python-dotenv
+openai
+langchain-openai
+langchain-core
+langgraph
+fastapi
+uvicorn[standard]
+python-multipart
+boto3==1.34.0
+requests
+httpx
