@@ -1,5 +1,5 @@
 import os
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -10,7 +10,14 @@ import httpx
 import json
 from botocore.exceptions import ClientError
 
-from main import main_flow, get_gauges
+from main import main_flow, get_gauges, regenerate_subtree
+from storyengine_pkg.generator import generate_single_episode
+from storyengine_pkg.models import (
+    StoryConfig,
+    InitialAnalysis,
+    EpisodeModel as Episode,  # Rename to avoid conflict with TypedDict
+    GenerateNextEpisodeRequest,
+)
 
 load_dotenv()
 
@@ -146,6 +153,52 @@ class GenerateFromS3Request(BaseModel):
     num_episode_endings: int = 3
 
 
+class ParentNodeInfo(BaseModel):
+    """재생성할 부모 노드 정보"""
+    nodeId: str
+    text: str
+    choices: List[str]
+    situation: Optional[str] = None
+    npcEmotions: Optional[Dict[str, str]] = None
+    tags: Optional[List[str]] = None
+    depth: int
+
+
+class SubtreeRegenerationRequest(BaseModel):
+    """서브트리 재생성 요청"""
+    episodeTitle: str
+    episodeOrder: int
+    parentNode: ParentNodeInfo
+    currentDepth: int
+    maxDepth: int
+    novelContext: str
+    previousChoices: List[str] = []
+    selectedGaugeIds: List[str]
+
+    # 캐싱된 분석 결과 (성능 최적화)
+    summary: Optional[str] = None
+    charactersJson: Optional[str] = None
+    gaugesJson: Optional[str] = None
+
+
+class RegeneratedNode(BaseModel):
+    """재생성된 노드"""
+    id: str
+    text: str
+    choices: List[str]
+    depth: int
+    details: Optional[Dict] = None
+    children: List[Any] = []
+
+
+class SubtreeRegenerationResponse(BaseModel):
+    """서브트리 재생성 응답"""
+    status: str
+    message: str
+    regeneratedNodes: List[Dict]
+    totalNodesRegenerated: int
+
+
 class GaugeInfo(BaseModel):
     id: str
     name: str
@@ -217,57 +270,75 @@ async def analyze_novel_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/generate")
-async def generate_story(request: GenerateRequest):
-    """
-    인터랙티브 스토리 생성
+# @app.post("/generate")
+# async def generate_story(request: GenerateRequest):
+#     """
+#     DEPRECATED: This endpoint generates all episodes at once.
+#     It will be replaced by the sequential generation flow.
+#     """
+#     if not API_KEY:
+#         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
+#
+#     # 유효성 검사
+#     if len(request.selected_gauge_ids) < 2:
+#         raise HTTPException(status_code=400, detail="게이지 ID를 2개 이상 선택해야 합니다.")
+#
+#     if not (2 <= request.max_depth <= 5):
+#         raise HTTPException(status_code=400, detail="트리 깊이는 2~5 사이여야 합니다.")
+#
+#     if request.num_episodes < 1:
+#         raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
+#
+#     try:
+#         # ending_config 변환
+#         ending_config_dict = None
+#         if request.ending_config:
+#             ending_config_dict = {
+#                 "happy": request.ending_config.happy,
+#                 "tragic": request.ending_config.tragic,
+#                 "neutral": request.ending_config.neutral,
+#                 "open": request.ending_config.open,
+#                 "bad": request.ending_config.bad,
+#                 "bittersweet": request.ending_config.bittersweet
+#             }
+#             # 0인 항목 제거
+#             ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
+#
+#         result = await main_flow(
+#             api_key=API_KEY,
+#             novel_text=request.novel_text,
+#             selected_gauge_ids=request.selected_gauge_ids,
+#             num_episodes=request.num_episodes,
+#             max_depth=request.max_depth,
+#             ending_config=ending_config_dict,
+#             num_episode_endings=request.num_episode_endings
+#         )
+#         return result
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=str(e))
 
-    Parameters:
-    - novel_text: 소설 텍스트
-    - selected_gauge_ids: 선택한 게이지 ID 리스트 (2개)
-    - num_episodes: 에피소드 개수 (기본값: 3)
-    - max_depth: 트리 깊이 (기본값: 3, 범위: 2~5)
+@app.post("/generate-next-episode", response_model=Episode)
+async def generate_next_episode_endpoint(request: GenerateNextEpisodeRequest):
+    """
+    Generates a single episode sequentially.
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
-
-    # 유효성 검사
-    if len(request.selected_gauge_ids) < 2:
-        raise HTTPException(status_code=400, detail="게이지 ID를 2개 이상 선택해야 합니다.")
-
-    if not (2 <= request.max_depth <= 5):
-        raise HTTPException(status_code=400, detail="트리 깊이는 2~5 사이여야 합니다.")
-
-    if request.num_episodes < 1:
-        raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
-
+    
     try:
-        # ending_config 변환
-        ending_config_dict = None
-        if request.ending_config:
-            ending_config_dict = {
-                "happy": request.ending_config.happy,
-                "tragic": request.ending_config.tragic,
-                "neutral": request.ending_config.neutral,
-                "open": request.ending_config.open,
-                "bad": request.ending_config.bad,
-                "bittersweet": request.ending_config.bittersweet
-            }
-            # 0인 항목 제거
-            ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
-
-        result = await main_flow(
+        newly_generated_episode = await generate_single_episode(
             api_key=API_KEY,
-            novel_text=request.novel_text,
-            selected_gauge_ids=request.selected_gauge_ids,
-            num_episodes=request.num_episodes,
-            max_depth=request.max_depth,
-            ending_config=ending_config_dict,
-            num_episode_endings=request.num_episode_endings
+            initial_analysis=request.initial_analysis,
+            story_config=request.story_config,
+            novel_context=request.novel_context,
+            current_episode_order=request.current_episode_order,
+            previous_episode_data=request.previous_episode
         )
-        return result
+        return newly_generated_episode
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 @app.post("/generate/file")
@@ -452,6 +523,64 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
         import traceback
         error_detail = f"Story generation failed: {str(e)}\n{traceback.format_exc()}"
         print(f"❌ 오류 발생:\n{error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
+
+
+@app.post("/regenerate-subtree", response_model=SubtreeRegenerationResponse)
+async def regenerate_node_subtree(request: SubtreeRegenerationRequest):
+    """
+    수정된 부모 노드를 기반으로 하위 서브트리를 재생성합니다.
+
+    Top-Down 방식으로 상위 노드 수정 시 하위 노드들을 새로운 내용에 맞춰 재생성합니다.
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
+
+    try:
+        print(f"🔄 서브트리 재생성 요청 받음")
+        print(f"  에피소드: {request.episodeTitle} (#{request.episodeOrder})")
+        print(f"  부모 노드: {request.parentNode.nodeId} (depth {request.currentDepth}/{request.maxDepth})")
+
+        # 부모 노드 정보를 Dict로 변환
+        parent_node_dict = {
+            "nodeId": request.parentNode.nodeId,
+            "text": request.parentNode.text,
+            "choices": request.parentNode.choices,
+            "situation": request.parentNode.situation,
+            "npcEmotions": request.parentNode.npcEmotions,
+            "tags": request.parentNode.tags,
+            "depth": request.parentNode.depth
+        }
+
+        # 서브트리 재생성 실행 (캐시된 정보 활용)
+        result = await regenerate_subtree(
+            api_key=API_KEY,
+            parent_node=parent_node_dict,
+            novel_context=request.novelContext,
+            selected_gauge_ids=request.selectedGaugeIds,
+            current_depth=request.currentDepth,
+            max_depth=request.maxDepth,
+            episode_title=request.episodeTitle,
+            previous_choices=request.previousChoices,
+            # 캐싱된 정보 전달 (새로 분석 건너뛰기)
+            cached_summary=request.summary,
+            cached_characters_json=request.charactersJson,
+            cached_gauges_json=request.gaugesJson
+        )
+
+        print(f"✅ 서브트리 재생성 완료: {result['totalNodesRegenerated']}개 노드")
+
+        return SubtreeRegenerationResponse(
+            status=result["status"],
+            message=result["message"],
+            regeneratedNodes=result["regeneratedNodes"],
+            totalNodesRegenerated=result["totalNodesRegenerated"]
+        )
+
+    except Exception as e:
+        import traceback
+        error_detail = f"Subtree regeneration failed: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ 서브트리 재생성 오류:\n{error_detail}")
         raise HTTPException(status_code=500, detail=error_detail)
 
 

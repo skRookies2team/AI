@@ -1,7 +1,7 @@
 """
 데이터 모델 정의
 """
-from typing import TypedDict, List, Dict
+from typing import TypedDict, List, Dict, Optional
 
 
 class Character(TypedDict):
@@ -68,3 +68,30 @@ class Episode(TypedDict):
     intro_text: str
     nodes: List[StoryNode]
     endings: List[EpisodeEnding]
+
+# ============================================
+# NEW PYDANTIC MODELS FOR SEQUENTIAL GENERATION
+# ============================================
+
+from pydantic import BaseModel, Field
+
+class StoryConfig(BaseModel):
+    num_episodes: int
+    max_depth: int
+    selected_gauge_ids: List[str]
+
+class InitialAnalysis(BaseModel):
+    summary: str
+    characters: List[Dict]
+
+class EpisodeModel(BaseModel):
+    episode_order: int
+    title: str
+    start_node: Dict
+
+class GenerateNextEpisodeRequest(BaseModel):
+    initial_analysis: InitialAnalysis
+    story_config: StoryConfig
+    novel_context: str
+    current_episode_order: int
+    previous_episode: Optional[EpisodeModel] = None
