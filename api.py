@@ -2,13 +2,15 @@ import os
 from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 import boto3
 import requests
 import httpx
 import json
 from botocore.exceptions import ClientError
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
 from main import main_flow, get_gauges, regenerate_subtree
 from storyengine_pkg.generator import generate_single_episode
@@ -100,6 +102,33 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Validation Error Handler (422 에러 상세 로깅)
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    print("=" * 80)
+    print("🚨 422 VALIDATION ERROR 발생!")
+    print(f"📍 URL: {request.url}")
+    print(f"📍 Method: {request.method}")
+    print("=" * 80)
+    print("❌ Validation Errors:")
+    for error in exc.errors():
+        print(f"  - Location: {error['loc']}")
+        print(f"    Message: {error['msg']}")
+        print(f"    Type: {error['type']}")
+        if 'input' in error:
+            print(f"    Input: {error['input']}")
+        print()
+    print("=" * 80)
+
+    # 클라이언트에게도 상세한 에러 반환
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "body": await request.body() if hasattr(request, 'body') else None
+        }
+    )
 
 API_KEY = os.environ.get("OPENAI_API_KEY")
 
@@ -355,9 +384,16 @@ async def generate_next_episode_endpoint(request: GenerateNextEpisodeRequest):
     """
     Generates a single episode sequentially.
     """
+    print("=" * 60)
+    print("📥 /generate-next-episode 요청 수신")
+    print(f"  - Current Episode Order: {request.current_episode_order}")
+    print(f"  - Story Config: {request.story_config}")
+    print(f"  - Has Previous Episode: {request.previous_episode is not None}")
+    print("=" * 60)
+
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
-    
+
     try:
         newly_generated_episode = await generate_single_episode(
             api_key=API_KEY,
@@ -369,6 +405,9 @@ async def generate_next_episode_endpoint(request: GenerateNextEpisodeRequest):
         )
         return newly_generated_episode
     except Exception as e:
+        print(f"❌ 에러 발생: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 

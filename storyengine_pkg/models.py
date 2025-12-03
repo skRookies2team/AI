@@ -84,7 +84,7 @@ class StoryConfig(BaseModel):
         populate_by_name = True  # Allow both snake_case and camelCase
 
 class InitialAnalysis(BaseModel):
-    summary: str
+    summary: Optional[str] = None
     characters: List[Dict]
 
 class EpisodeModel(BaseModel):
