@@ -125,10 +125,13 @@ class EndingConfig(BaseModel):
 class GenerateRequest(BaseModel):
     novel_text: str
     selected_gauge_ids: List[str]  # 선택한 게이지 ID 2개
+    selected_gauges: Optional[List[GaugeInfo]] = None  # 게이지 전체 정보 (옵션)
     num_episodes: int = 3
     max_depth: int = 3  # 2~5
     ending_config: Optional[EndingConfig] = None  # 엔딩 타입별 개수
     num_episode_endings: int = 3  # 에피소드별 엔딩 개수
+    file_key: Optional[str] = None  # S3 파일 키 (옵션)
+    s3_upload_url: Optional[str] = None  # S3 업로드 Pre-signed URL (옵션)
 
 
 class AnalyzeFromS3Request(BaseModel):
@@ -205,7 +208,7 @@ class GaugeInfo(BaseModel):
     meaning: str
     min_label: str
     max_label: str
-    description: str
+    description: Optional[str] = None
 
 
 class CharacterInfo(BaseModel):
@@ -270,52 +273,82 @@ async def analyze_novel_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# @app.post("/generate")
-# async def generate_story(request: GenerateRequest):
-#     """
-#     DEPRECATED: This endpoint generates all episodes at once.
-#     It will be replaced by the sequential generation flow.
-#     """
-#     if not API_KEY:
-#         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
-#
-#     # 유효성 검사
-#     if len(request.selected_gauge_ids) < 2:
-#         raise HTTPException(status_code=400, detail="게이지 ID를 2개 이상 선택해야 합니다.")
-#
-#     if not (2 <= request.max_depth <= 5):
-#         raise HTTPException(status_code=400, detail="트리 깊이는 2~5 사이여야 합니다.")
-#
-#     if request.num_episodes < 1:
-#         raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
-#
-#     try:
-#         # ending_config 변환
-#         ending_config_dict = None
-#         if request.ending_config:
-#             ending_config_dict = {
-#                 "happy": request.ending_config.happy,
-#                 "tragic": request.ending_config.tragic,
-#                 "neutral": request.ending_config.neutral,
-#                 "open": request.ending_config.open,
-#                 "bad": request.ending_config.bad,
-#                 "bittersweet": request.ending_config.bittersweet
-#             }
-#             # 0인 항목 제거
-#             ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
-#
-#         result = await main_flow(
-#             api_key=API_KEY,
-#             novel_text=request.novel_text,
-#             selected_gauge_ids=request.selected_gauge_ids,
-#             num_episodes=request.num_episodes,
-#             max_depth=request.max_depth,
-#             ending_config=ending_config_dict,
-#             num_episode_endings=request.num_episode_endings
-#         )
-#         return result
-#     except Exception as e:
-#         raise HTTPException(status_code=500, detail=str(e))
+@app.post("/generate")
+async def generate_story(request: GenerateRequest):
+    """
+    스토리 생성 - relay-server에서 호출
+
+    novelText를 받아서 스토리를 생성하고, s3_upload_url이 있으면 S3에 업로드
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
+
+    # 유효성 검사
+    if len(request.selected_gauge_ids) < 2:
+        raise HTTPException(status_code=400, detail="게이지 ID를 2개 이상 선택해야 합니다.")
+
+    if not (2 <= request.max_depth <= 5):
+        raise HTTPException(status_code=400, detail="트리 깊이는 2~5 사이여야 합니다.")
+
+    if request.num_episodes < 1:
+        raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
+
+    try:
+        # ending_config 변환
+        ending_config_dict = None
+        if request.ending_config:
+            ending_config_dict = {
+                "happy": request.ending_config.happy,
+                "tragic": request.ending_config.tragic,
+                "neutral": request.ending_config.neutral,
+                "open": request.ending_config.open,
+                "bad": request.ending_config.bad,
+                "bittersweet": request.ending_config.bittersweet
+            }
+            # 0인 항목 제거
+            ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
+
+        print(f"🎬 스토리 생성 시작 (에피소드: {request.num_episodes}, 깊이: {request.max_depth})")
+        story_data = await main_flow(
+            api_key=API_KEY,
+            novel_text=request.novel_text,
+            selected_gauge_ids=request.selected_gauge_ids,
+            num_episodes=request.num_episodes,
+            max_depth=request.max_depth,
+            ending_config=ending_config_dict,
+            num_episode_endings=request.num_episode_endings
+        )
+        print(f"✅ 스토리 생성 완료")
+
+        # Pre-signed URL이 있으면 S3에 업로드하고 메타데이터만 반환
+        if request.s3_upload_url:
+            print(f"📤 S3에 업로드 시작")
+            await upload_to_presigned_url(request.s3_upload_url, story_data)
+            print(f"✅ S3 업로드 완료")
+
+            # 메타데이터 추출
+            metadata = extract_metadata(story_data)
+
+            # 메타데이터만 반환 (경량 응답)
+            return {
+                "status": "success",
+                "file_key": request.file_key or "unknown",
+                "data": {
+                    "metadata": metadata
+                }
+            }
+        else:
+            # Pre-signed URL이 없으면 전체 데이터 반환 (기존 방식)
+            return {
+                "status": "success",
+                "data": story_data
+            }
+
+    except Exception as e:
+        import traceback
+        error_detail = f"Story generation failed: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ 오류 발생:\n{error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
 
 @app.post("/generate-next-episode", response_model=Episode)
 async def generate_next_episode_endpoint(request: GenerateNextEpisodeRequest):
@@ -582,6 +615,18 @@ async def regenerate_node_subtree(request: SubtreeRegenerationRequest):
         error_detail = f"Subtree regeneration failed: {str(e)}\n{traceback.format_exc()}"
         print(f"❌ 서브트리 재생성 오류:\n{error_detail}")
         raise HTTPException(status_code=500, detail=error_detail)
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for relay server
+    """
+    return {
+        "status": "healthy",
+        "service": "AI Story Generation Server",
+        "version": "1.0.0"
+    }
 
 
 # ============================================

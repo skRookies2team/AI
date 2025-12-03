@@ -88,12 +88,22 @@ class InitialAnalysis(BaseModel):
     characters: List[Dict]
 
 class EpisodeModel(BaseModel):
-    episode_order: int = Field(alias="episodeOrder")
+    # Java에서 "order" 또는 "episodeOrder"로 보낼 수 있음
+    episode_order: int = Field(alias="order")
     title: str
-    start_node: Dict = Field(alias="startNode")
+
+    # Java에서 "startNode" (단일) 또는 "nodes" (배열)로 보낼 수 있음
+    start_node: Optional[Dict] = Field(default=None, alias="startNode")
+    nodes: Optional[List[Dict]] = Field(default=None)
+
+    # 추가 필드 (Java EpisodeDto에 있는 필드들)
+    description: Optional[str] = None
+    theme: Optional[str] = None
+    intro_text: Optional[str] = Field(default=None, alias="introText")
+    endings: Optional[List[Dict]] = None
 
     class Config:
-        populate_by_name = True
+        populate_by_name = True  # snake_case와 camelCase 모두 허용
 
 class GenerateNextEpisodeRequest(BaseModel):
     initial_analysis: InitialAnalysis = Field(alias="initialAnalysis")
