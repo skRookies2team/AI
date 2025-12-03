@@ -76,22 +76,31 @@ class Episode(TypedDict):
 from pydantic import BaseModel, Field
 
 class StoryConfig(BaseModel):
-    num_episodes: int
-    max_depth: int
-    selected_gauge_ids: List[str]
+    num_episodes: int = Field(alias="numEpisodes")
+    max_depth: int = Field(alias="maxDepth")
+    selected_gauge_ids: List[str] = Field(alias="selectedGaugeIds")
+
+    class Config:
+        populate_by_name = True  # Allow both snake_case and camelCase
 
 class InitialAnalysis(BaseModel):
     summary: str
     characters: List[Dict]
 
 class EpisodeModel(BaseModel):
-    episode_order: int
+    episode_order: int = Field(alias="episodeOrder")
     title: str
-    start_node: Dict
+    start_node: Dict = Field(alias="startNode")
+
+    class Config:
+        populate_by_name = True
 
 class GenerateNextEpisodeRequest(BaseModel):
-    initial_analysis: InitialAnalysis
-    story_config: StoryConfig
-    novel_context: str
-    current_episode_order: int
-    previous_episode: Optional[EpisodeModel] = None
+    initial_analysis: InitialAnalysis = Field(alias="initialAnalysis")
+    story_config: StoryConfig = Field(alias="storyConfig")
+    novel_context: str = Field(alias="novelContext")
+    current_episode_order: int = Field(alias="currentEpisodeOrder")
+    previous_episode: Optional[EpisodeModel] = Field(alias="previousEpisode", default=None)
+
+    class Config:
+        populate_by_name = True  # Allow both snake_case and camelCase

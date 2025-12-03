@@ -289,12 +289,17 @@ async def regenerate_subtree(
     selected_gauges = [g for g in all_gauges if g.get('id') in selected_gauge_ids]
 
     if len(selected_gauges) < len(selected_gauge_ids):
-        # ID가 일치하지 않으면 앞에서부터 선택
+        # ID가 일치하지 않는 경우 경고 및 에러 처리
+        found_ids = {g.get('id') for g in selected_gauges}
+        missing_ids = set(selected_gauge_ids) - found_ids
+        print(f"  ⚠️ Warning: Requested gauge IDs not found: {missing_ids}")
+        print(f"  ⚠️ Available gauge IDs: {[g.get('id') for g in all_gauges]}")
+
+        # 누락된 ID에 대해 사용 가능한 게이지로 대체 (fallback)
         for g in all_gauges:
-            if g not in selected_gauges:
+            if g not in selected_gauges and len(selected_gauges) < len(selected_gauge_ids):
                 selected_gauges.append(g)
-            if len(selected_gauges) >= len(selected_gauge_ids):
-                break
+                print(f"  🔄 Fallback: Using gauge '{g.get('name')}' (id: {g.get('id')})")
 
     print(f"  📌 선택된 게이지: {[g.get('name') for g in selected_gauges]}")
 
@@ -326,9 +331,11 @@ async def regenerate_subtree(
             context=context
         )
 
-        if child_nodes:
+        if child_nodes and len(child_nodes) > 0:
             regenerated_nodes.append(child_nodes[0])  # 각 선택지의 루트 자식 노드
             print(f"    ✅ {_count_nodes(child_nodes[0])}개 노드 생성")
+        else:
+            print(f"    ⚠️ Warning: Failed to generate child nodes for choice '{choice_text}'")
 
     # 5. 결과 반환
     total_regenerated = sum(_count_nodes(node) for node in regenerated_nodes)
@@ -494,17 +501,21 @@ async def _generate_child_subtree(
                 max_depth=max_depth,
                 context=context
             )
-            if sub_children:
-                child_node["children"].extend(sub_children)
+            if sub_children and len(sub_children) > 0:
+                child_node["children"].append(sub_children[0])
 
     return [child_node]
 
 
 def _count_nodes(node: Dict) -> int:
     """트리 노드 개수를 재귀적으로 계산"""
+    if node is None:
+        return 0
     count = 1
-    for child in node.get("children", []):
-        count += _count_nodes(child)
+    children = node.get("children", [])
+    if children:
+        for child in children:
+            count += _count_nodes(child)
     return count
 
 
