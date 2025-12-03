@@ -108,6 +108,22 @@ API_KEY = os.environ.get("OPENAI_API_KEY")
 # Request/Response 모델
 # ============================================
 
+class GaugeInfo(BaseModel):
+    id: str
+    name: str
+    meaning: str
+    min_label: str
+    max_label: str
+    description: Optional[str] = None
+
+
+class CharacterInfo(BaseModel):
+    name: str
+    aliases: List[str]
+    description: str
+    relationships: List[str]
+
+
 class GaugeRequest(BaseModel):
     novel_text: str
 
@@ -200,22 +216,6 @@ class SubtreeRegenerationResponse(BaseModel):
     message: str
     regeneratedNodes: List[Dict]
     totalNodesRegenerated: int
-
-
-class GaugeInfo(BaseModel):
-    id: str
-    name: str
-    meaning: str
-    min_label: str
-    max_label: str
-    description: Optional[str] = None
-
-
-class CharacterInfo(BaseModel):
-    name: str
-    aliases: List[str]
-    description: str
-    relationships: List[str]
 
 
 class GaugeResponse(BaseModel):
