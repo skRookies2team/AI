@@ -569,7 +569,7 @@ class InteractiveStoryDirector:
 
         # 노드 타입 결정 (AI가 선택지 개수는 자동 판단)
         max_depth = state.get("max_depth", 5)
-        if depth >= max_depth:
+        if depth == max_depth:
             node_type = "ending"
         elif depth == 0:
             node_type = "first_choice"
@@ -810,7 +810,7 @@ class InteractiveStoryDirector:
             latest_nodes = [n for n in nodes if n["depth"] == max_current_depth]
 
         # 최대 깊이 체크
-        if latest_nodes and latest_nodes[0]["depth"] >= max_depth:
+        if latest_nodes and latest_nodes[0]["depth"] > max_depth:
             print(f"🏁 최대 깊이 {max_depth} 도달. 트리 생성 완료.")
             return END
 

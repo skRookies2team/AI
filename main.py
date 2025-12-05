@@ -457,7 +457,7 @@ async def _generate_child_subtree(
     import uuid
 
     # 노드 타입 결정
-    if current_depth >= max_depth:
+    if current_depth == max_depth:
         node_type = "ending"
     elif current_depth == max_depth - 1:
         node_type = "climax"
