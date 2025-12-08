@@ -251,6 +251,7 @@ class GaugeResponse(BaseModel):
     summary: str
     characters: List[dict]
     gauges: List[dict]
+    finalEndings: Optional[List[dict]] = None
 
 
 # ============================================
