@@ -25,21 +25,67 @@ async def generate_single_episode(
     # --- Determine the context for the LLM prompt ---
     if previous_episode_data is None:
         # This is the first episode.
+        # 더 많은 컨텍스트 전달 (3000자 → 15000자)
+        novel_excerpt = novel_context[:15000] if len(novel_context) > 15000 else novel_context
+        excerpt_info = f"(showing first 15,000 characters of {len(novel_context):,} total)" if len(novel_context) > 15000 else "(complete text)"
+
+        # 요약과 캐릭터 정보 추출
+        summary_text = initial_analysis.summary if initial_analysis.summary else "ERROR: No summary provided"
+        characters_text = json.dumps(initial_analysis.characters, ensure_ascii=False, indent=2) if initial_analysis.characters else "ERROR: No characters"
+
         context_prompt = f"""
-        Based on the following novel, create the very first episode of an interactive story.
+        You are adapting an EXISTING novel into an interactive story game.
 
-        ORIGINAL NOVEL CONTEXT:
-        {novel_context[:3000]}...
+        ⚠️ CRITICAL: DO NOT CREATE A NEW STORY. You must use the EXACT plot below.
+        ⚠️ FORBIDDEN: Using generic names like "캐릭터A", "캐릭터B", "주인공"
+        ⚠️ REQUIRED: Use the SPECIFIC character names from the CHARACTER LIST below
 
-        Summary: {initial_analysis.summary if initial_analysis.summary else "Use the novel context above"}
-        Main characters: {json.dumps(initial_analysis.characters, ensure_ascii=False, indent=2)}
+        ═══════════════════════════════════════════════════════════════════
+        📖 ORIGINAL STORY PLOT (YOU MUST FOLLOW THIS EXACTLY):
+        ═══════════════════════════════════════════════════════════════════
 
-        The story should have {story_config.num_episodes} episodes in total.
-        The selected themes (gauges) are: {', '.join(story_config.selected_gauge_ids)}.
-        This is episode 1.
+        {summary_text}
 
-        IMPORTANT: Stay faithful to the original novel's setting, characters, and plot.
-        Transform the novel into an interactive experience where players make choices that affect the story.
+        ═══════════════════════════════════════════════════════════════════
+        👥 CHARACTER LIST (USE THESE EXACT NAMES IN YOUR EPISODE):
+        ═══════════════════════════════════════════════════════════════════
+
+        {characters_text}
+
+        ═══════════════════════════════════════════════════════════════════
+        📚 ORIGINAL NOVEL EXCERPT {excerpt_info}:
+        ═══════════════════════════════════════════════════════════════════
+
+        {novel_excerpt}
+
+        ═══════════════════════════════════════════════════════════════════
+
+        TASK: Create Episode {current_episode_order} of {story_config.num_episodes}
+        THEMES: {', '.join(story_config.selected_gauge_ids)}
+
+        🚫 ABSOLUTE PROHIBITIONS:
+        1. DO NOT use generic character names (캐릭터A, 캐릭터B, 주인공, etc.)
+        2. DO NOT create new plot events not in the summary above
+        3. DO NOT change character names, relationships, or personalities
+        4. DO NOT invent new characters not listed above
+        5. DO NOT change the story's setting, time period, or core conflict
+
+        ✅ MANDATORY REQUIREMENTS:
+        1. Episode MUST start from an event described in the STORY PLOT above
+        2. ALL character names MUST match the CHARACTER LIST exactly
+        3. Scene descriptions MUST match the novel's setting and atmosphere
+        4. Dialogue MUST reflect character personalities from the CHARACTER LIST
+        5. Choices affect HOW events unfold, not WHAT events happen
+        6. The plot timeline MUST follow the novel's sequence
+
+        EXAMPLE (if story is Romeo and Juliet):
+        ✅ CORRECT: "로미오는 캐플릿 가문의 무도회에 몰래 잠입했다..."
+        ❌ WRONG: "캐릭터A는 어두운 밤에 갈등을 마주했다..."
+
+        Before generating, ask yourself:
+        - Did I use the EXACT character names from the list?
+        - Is this scene from the actual novel plot?
+        - Would someone who read the original novel recognize this?
         """
     else:
         # This is a subsequent episode (e.g., Ep 2, 3...).
@@ -125,16 +171,25 @@ async def generate_single_episode(
       }},
       "endings": [
         {{
+          "id": "ep{current_episode_order}_ending_1",
           "title": "Ending Title 1",
-          "condition": "Condition to reach this ending (e.g., 'Choose path A at node_5')",
+          "condition": "cooperative >= 2 AND trusting >= 1",
           "text": "The full ending text describing what happens...",
           "gauge_changes": {{"{story_config.selected_gauge_ids[0] if story_config.selected_gauge_ids else 'gauge1'}": 10, "{story_config.selected_gauge_ids[1] if len(story_config.selected_gauge_ids) > 1 else 'gauge2'}": -5}}
         }},
         {{
+          "id": "ep{current_episode_order}_ending_2",
           "title": "Ending Title 2",
-          "condition": "Condition to reach this ending (e.g., 'Choose path B at node_5')",
+          "condition": "aggressive >= 2 OR doubtful >= 2",
           "text": "Another ending text...",
           "gauge_changes": {{"{story_config.selected_gauge_ids[0] if story_config.selected_gauge_ids else 'gauge1'}": -10, "{story_config.selected_gauge_ids[1] if len(story_config.selected_gauge_ids) > 1 else 'gauge2'}": 15}}
+        }},
+        {{
+          "id": "ep{current_episode_order}_ending_3",
+          "title": "Ending Title 3",
+          "condition": "rational >= 3",
+          "text": "A third possible ending...",
+          "gauge_changes": {{"{story_config.selected_gauge_ids[0] if story_config.selected_gauge_ids else 'gauge1'}": 5, "{story_config.selected_gauge_ids[1] if len(story_config.selected_gauge_ids) > 1 else 'gauge2'}": 5}}
         }}
       ]
     }}
@@ -152,10 +207,15 @@ async def generate_single_episode(
     - ONLY nodes at depth {story_config.max_depth} (leaf nodes) should have empty 'choices' and 'children' arrays.
     - Ensure the 'id' of each node is unique within the episode (use node_0, node_1, node_2, etc.).
     - Generate 2-4 possible endings for this episode. Each ending should:
+      * Have a unique 'id' field (e.g., "ep{current_episode_order}_ending_1", "ep{current_episode_order}_ending_2", etc.)
       * Have a descriptive title
-      * Specify the condition/path to reach it (which leaf nodes at depth {story_config.max_depth} lead to this ending)
-      * Provide full ending text (200-400 words)
-      * Include gauge changes that reflect the ending's outcome (positive/negative values for the selected gauges)
+      * Specify the 'condition' using TAG-BASED LOGIC (e.g., "cooperative >= 2 AND trusting >= 1", "aggressive >= 3 OR doubtful >= 2")
+        - Available tags: cooperative, aggressive, cautious, trusting, doubtful, brave, fearful, rational, emotional
+        - Use comparison operators: >=, <=, >, <, ==
+        - Use logical operators: AND, OR
+        - Tags accumulate based on player choices throughout the episode
+      * Provide full ending text (200-400 words) describing the outcome
+      * Include 'gauge_changes' dict with gauge ID keys and integer values (can be positive or negative)
       * Use the EXACT field name "gauge_changes" (with underscore, not camelCase)
 
     EXAMPLE FOR maxDepth={story_config.max_depth}:
@@ -168,7 +228,13 @@ async def generate_single_episode(
     ✓ Do ALL nodes at depths 0 through {story_config.max_depth - 1} have exactly 2 choices and 2 children?
     ✓ Do ONLY nodes at depth {story_config.max_depth} have empty choices/children arrays?
     ✓ Is the total node count approximately {2 ** (story_config.max_depth + 1) - 1}?
+    ✓ Did I generate 2-4 endings with unique 'id' fields (e.g., "ep{current_episode_order}_ending_1")?
+    ✓ Do all ending 'condition' fields use TAG-BASED logic (not node paths)?
     ✓ Did I use "gauge_changes" (not "gaugeChanges") in all endings?
+
+    **CRITICAL: All story content (node text, choice text, ending text, titles) MUST be written in Korean (한글).**
+    - Only field names and IDs should be in English
+    - All narrative content must be in Korean
     """
 
     # --- Call the LLM and parse the response ---

@@ -95,19 +95,32 @@ def determine_episode_ending(choices_made: List[StoryChoice], endings: List[Epis
     """
     tag_scores = calculate_tag_scores(choices_made)
 
+    print(f"\n🎯 [엔딩 판정] 태그 점수: {tag_scores}")
+    print(f"🎯 [엔딩 판정] 가능한 엔딩 개수: {len(endings)}")
+
     # 각 엔딩의 조건 확인 (default 제외하고 먼저 체크)
     for ending in endings:
         condition = ending.get("condition", "default")
+        print(f"  - 엔딩 '{ending.get('title', '?')}': condition='{condition}'")
         if condition != "default" and evaluate_condition(condition, tag_scores):
+            print(f"    ✅ 조건 만족! 이 엔딩 반환")
             return ending
+        else:
+            print(f"    ❌ 조건 불만족")
 
     # default 엔딩 반환
     for ending in endings:
         if ending.get("condition") == "default":
+            print(f"  ✅ default 엔딩 반환: '{ending.get('title', '?')}'")
             return ending
 
     # 아무것도 없으면 첫 번째 엔딩
-    return endings[0] if endings else None
+    if endings:
+        print(f"  ⚠️ 조건 만족 엔딩 없음, 첫 번째 엔딩 반환: '{endings[0].get('title', '?')}'")
+        return endings[0]
+    else:
+        print(f"  ❌ 엔딩이 하나도 없음!")
+        return None
 
 
 def calculate_final_ending(episode_results: List[Dict], final_endings: List[FinalEnding], initial_gauges: Dict[str, int] = None) -> Dict:
@@ -128,27 +141,45 @@ def calculate_final_ending(episode_results: List[Dict], final_endings: List[Fina
     else:
         gauges = initial_gauges.copy()
 
+    print(f"\n🏁 [최종 엔딩 판정] 초기 게이지: {gauges}")
+
     # 에피소드별 게이지 변화 누적
-    for result in episode_results:
+    for i, result in enumerate(episode_results):
         ending = result.get("ending", {})
         changes = ending.get("gauge_changes", {})
+        print(f"  📖 에피소드 {i+1} 엔딩: '{ending.get('title', '?')}' - 게이지 변화: {changes}")
         for gauge_id, change in changes.items():
             if gauge_id not in gauges:
                 gauges[gauge_id] = 50
+            old_val = gauges[gauge_id]
             gauges[gauge_id] = max(0, min(100, gauges[gauge_id] + change))
+            print(f"     {gauge_id}: {old_val} → {gauges[gauge_id]} ({change:+d})")
+
+    print(f"\n🏁 [최종 엔딩 판정] 최종 게이지: {gauges}")
+    print(f"🏁 [최종 엔딩 판정] 가능한 최종 엔딩 개수: {len(final_endings)}")
 
     # 최종 엔딩 결정
     for ending in final_endings:
         condition = ending.get("condition", "default")
+        print(f"  - 최종 엔딩 '{ending.get('title', '?')}': condition='{condition}'")
         if condition != "default" and evaluate_gauge_condition(condition, gauges):
+            print(f"    ✅ 조건 만족! 이 최종 엔딩 반환")
             return {"gauges": gauges, "ending": ending}
+        else:
+            print(f"    ❌ 조건 불만족")
 
     # default 엔딩
     for ending in final_endings:
         if ending.get("condition") == "default":
+            print(f"  ✅ default 최종 엔딩 반환: '{ending.get('title', '?')}'")
             return {"gauges": gauges, "ending": ending}
 
-    return {"gauges": gauges, "ending": final_endings[0] if final_endings else None}
+    if final_endings:
+        print(f"  ⚠️ 조건 만족 엔딩 없음, 첫 번째 엔딩 반환")
+        return {"gauges": gauges, "ending": final_endings[0]}
+    else:
+        print(f"  ❌ 최종 엔딩이 하나도 없음!")
+        return {"gauges": gauges, "ending": None}
 
 
 def evaluate_gauge_condition(condition: str, gauges: Dict[str, int]) -> bool:

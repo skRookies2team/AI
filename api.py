@@ -267,15 +267,19 @@ async def root():
 @app.post("/analyze", response_model=GaugeResponse)
 async def analyze_novel(request: GaugeRequest):
     """
-    소설 분석 - 요약, 캐릭터, 게이지 제안 반환
+    소설 분석 - 요약, 캐릭터, 게이지 제안, 최종 엔딩 반환
 
     프론트엔드에서 게이지 선택 UI를 위해 먼저 호출
+    백엔드는 이 응답의 finalEndings를 endingConfigJson에 저장함
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
 
     try:
         result = await get_gauges(API_KEY, request.novel_text)
+        # finalEndings가 없으면 에러 로그 출력
+        if not result.get("finalEndings"):
+            print("⚠️ WARNING: /analyze response is missing 'finalEndings' field")
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -285,6 +289,7 @@ async def analyze_novel(request: GaugeRequest):
 async def analyze_novel_file(file: UploadFile = File(...)):
     """
     소설 파일 분석 - txt 파일 업로드
+    요약, 캐릭터, 게이지 제안, 최종 엔딩 반환
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -296,6 +301,9 @@ async def analyze_novel_file(file: UploadFile = File(...)):
         content = await file.read()
         novel_text = content.decode('utf-8')
         result = await get_gauges(API_KEY, novel_text)
+        # finalEndings가 없으면 에러 로그 출력
+        if not result.get("finalEndings"):
+            print("⚠️ WARNING: /analyze/file response is missing 'finalEndings' field")
         return result
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="파일 인코딩 오류. UTF-8 파일을 사용하세요.")
@@ -476,7 +484,7 @@ async def generate_story_from_file(
 @app.post("/analyze-from-s3")
 async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
     """
-    S3에서 소설 파일을 다운로드하여 분석
+    S3에서 소설 파일을 다운로드하여 분석 (요약, 캐릭터, 게이지, 최종 엔딩)
 
     백엔드가 S3에 업로드한 파일을 fileKey로 받아서 분석합니다.
 
@@ -494,8 +502,12 @@ async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
         # 1. S3에서 소설 다운로드
         novel_text = download_from_s3(request.file_key, request.bucket)
 
-        # 2. 분석 (요약, 캐릭터, 게이지)
+        # 2. 분석 (요약, 캐릭터, 게이지, 최종 엔딩)
         result = await get_gauges(API_KEY, novel_text)
+
+        # finalEndings가 없으면 에러 로그 출력
+        if not result.get("finalEndings"):
+            print("⚠️ WARNING: /analyze-from-s3 response is missing 'finalEndings' field")
 
         # 3. Pre-signed URL이 있으면 S3에 업로드하고 fileKey만 반환
         if request.s3_upload_url:
@@ -655,6 +667,97 @@ async def regenerate_node_subtree(request: SubtreeRegenerationRequest):
         error_detail = f"Subtree regeneration failed: {str(e)}\n{traceback.format_exc()}"
         print(f"❌ 서브트리 재생성 오류:\n{error_detail}")
         raise HTTPException(status_code=500, detail=error_detail)
+
+
+@app.post("/determine-episode-ending")
+async def determine_episode_ending_endpoint(request: Dict):
+    """
+    에피소드 엔딩 판정
+
+    Request:
+    {
+        "choices_made": [{"text": "...", "tags": ["cooperative", "trusting"]}],
+        "endings": [
+            {
+                "id": "ep1_ending_1",
+                "title": "...",
+                "condition": "cooperative >= 2",
+                "text": "...",
+                "gauge_changes": {"hope": 10}
+            }
+        ]
+    }
+
+    Response:
+    {
+        "ending": {...},
+        "tag_scores": {"cooperative": 2, "trusting": 1}
+    }
+    """
+    from storyengine_pkg.utils import determine_episode_ending, calculate_tag_scores
+
+    try:
+        choices_made = request.get("choices_made", [])
+        endings = request.get("endings", [])
+
+        tag_scores = calculate_tag_scores(choices_made)
+        ending = determine_episode_ending(choices_made, endings)
+
+        return {
+            "ending": ending,
+            "tag_scores": tag_scores
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/calculate-final-ending")
+async def calculate_final_ending_endpoint(request: Dict):
+    """
+    최종 엔딩 판정
+
+    Request:
+    {
+        "episode_results": [
+            {
+                "ending": {
+                    "gauge_changes": {"hope": 10, "trust": 5}
+                }
+            }
+        ],
+        "final_endings": [
+            {
+                "id": "ending_hope",
+                "type": "happy",
+                "title": "...",
+                "condition": "hope >= 70 AND trust >= 60",
+                "summary": "..."
+            }
+        ],
+        "initial_gauges": {"hope": 50, "trust": 50}
+    }
+
+    Response:
+    {
+        "final_gauges": {"hope": 60, "trust": 55},
+        "ending": {...}
+    }
+    """
+    from storyengine_pkg.utils import calculate_final_ending
+
+    try:
+        episode_results = request.get("episode_results", [])
+        final_endings = request.get("final_endings", [])
+        initial_gauges = request.get("initial_gauges")
+
+        result = calculate_final_ending(episode_results, final_endings, initial_gauges)
+
+        return {
+            "final_gauges": result.get("gauges"),
+            "ending": result.get("ending")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")
