@@ -123,6 +123,7 @@ async def generate_single_episode(
     {{
       "episode_order": {current_episode_order},
       "title": "Episode Title Here",
+      "intro_text": "Episode introduction text (100-200 words describing the episode's setting and mood)",
       "start_node": {{
         "id": "node_0",
         "text": "The story text for the first scene of the episode...",
