@@ -106,10 +106,12 @@ async def generate_single_episode(
     You are an expert interactive story writer.
     {context_prompt}
 
-    Generate the content for this episode, including a title, a starting node,
+    Generate the content for this episode, including a title, an intro_text, a starting node,
     a COMPLETE branching narrative tree up to EXACTLY depth {story_config.max_depth}, and possible endings.
 
-    CRITICAL: You MUST generate ALL nodes from depth 0 to depth {story_config.max_depth}.
+    🚨 CRITICAL REQUIREMENTS:
+    1. You MUST include "intro_text" field (100-200 words introducing the episode)
+    2. You MUST generate ALL nodes from depth 0 to depth {story_config.max_depth}
     - Depth 0: 1 starting node (root)
     - Depth 1: 2 nodes (children of the root node)
     - Depth 2: 4 nodes (each depth 1 node has 2 children)
@@ -119,11 +121,11 @@ async def generate_single_episode(
     - ONLY nodes at depth {story_config.max_depth} (leaf nodes) should have empty choices and children arrays
     - Total nodes should be approximately {2 ** (story_config.max_depth + 1) - 1} nodes (2^(maxDepth+1) - 1)
 
-    The response MUST be a single, valid JSON object that follows this exact structure:
+    🚨 MANDATORY: Your response MUST be a single, valid JSON object that follows this EXACT structure:
     {{
       "episode_order": {current_episode_order},
       "title": "Episode Title Here",
-      "intro_text": "Episode introduction text (100-200 words describing the episode's setting and mood)",
+      "intro_text": "🚨 REQUIRED: Write 100-200 words introducing this episode, describing the setting, mood, and context. DO NOT SKIP THIS FIELD!",
       "start_node": {{
         "id": "node_0",
         "text": "The story text for the first scene of the episode...",
@@ -224,7 +226,8 @@ async def generate_single_episode(
     - Depth 0: 1 node → Depth 1: 2 nodes → Depth 2: 4 nodes → Depth 3: 8 nodes (and so on)
     - The deepest nodes (at depth {story_config.max_depth}) are leaf nodes with NO choices or children
 
-    VERIFICATION CHECKLIST BEFORE RESPONDING:
+    🚨🚨🚨 VERIFICATION CHECKLIST BEFORE RESPONDING (MANDATORY):
+    ✓ Did I include the "intro_text" field with 100-200 words? (🚨 THIS IS MANDATORY!)
     ✓ Did I generate nodes at ALL depths from 0 to {story_config.max_depth}?
     ✓ Do ALL nodes at depths 0 through {story_config.max_depth - 1} have exactly 2 choices and 2 children?
     ✓ Do ONLY nodes at depth {story_config.max_depth} have empty choices/children arrays?
@@ -241,11 +244,12 @@ async def generate_single_episode(
     # --- Call the LLM and parse the response ---
     print(f"Generating Episode {current_episode_order} with prompt:\n{llm_prompt}")
     response = await director.llm.ainvoke(llm_prompt)
-    print(f"🤖 LLM Response content (first 500 chars): {response.content[:500]}")
+    print(f"🤖 LLM Response content (first 1000 chars): {response.content[:1000]}")
 
     generated_episode_data = director._parse_json(response.content)
     print(f"📊 Parsed episode data keys: {generated_episode_data.keys() if isinstance(generated_episode_data, dict) else 'NOT A DICT'}")
-    print(f"📊 Full parsed data: {json.dumps(generated_episode_data, ensure_ascii=False, indent=2)[:1000]}")
+    print(f"📊 Has intro_text in parsed data: {'intro_text' in generated_episode_data if isinstance(generated_episode_data, dict) else 'N/A'}")
+    print(f"📊 intro_text value: {generated_episode_data.get('intro_text', 'NOT FOUND') if isinstance(generated_episode_data, dict) else 'N/A'}")
 
     # --- Validate and return the Episode object ---
     try:
@@ -254,9 +258,16 @@ async def generate_single_episode(
             print("🔄 Converting start_node to nodes array for backend compatibility")
             generated_episode_data["nodes"] = [generated_episode_data["start_node"]]
 
+        # ⚠️ intro_text가 없으면 경고 출력
+        if not generated_episode_data.get("intro_text"):
+            print("❌ WARNING: LLM did not generate intro_text! This should not happen.")
+            print("❌ Please check the LLM prompt and response above.")
+
         new_episode = EpisodeModel(**generated_episode_data)
         print(f"✅ Successfully created EpisodeModel: order={new_episode.episode_order}, title={new_episode.title}")
         print(f"📦 Episode has {len(new_episode.nodes) if new_episode.nodes else 0} nodes")
+        print(f"📝 Intro text present: {new_episode.intro_text is not None} (length: {len(new_episode.intro_text) if new_episode.intro_text else 0})")
+
         return new_episode
     except Exception as e:
         print(f"❌ Error validating episode data: {e}")
