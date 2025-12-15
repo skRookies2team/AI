@@ -46,6 +46,7 @@ class StoryNodeDetail(TypedDict):
 class StoryChoice(TypedDict):
     text: str
     tags: List[str]
+    immediate_reaction: str  # 선택 직후 보여줄 즉각 반응 (100-200자)
 
 
 class StoryNode(TypedDict):

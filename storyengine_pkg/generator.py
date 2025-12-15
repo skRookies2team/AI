@@ -110,7 +110,7 @@ async def generate_single_episode(
     a COMPLETE branching narrative tree up to EXACTLY depth {story_config.max_depth}, and possible endings.
 
     🚨 CRITICAL REQUIREMENTS:
-    1. You MUST include "intro_text" field (100-200 words introducing the episode)
+    1. You MUST include "intro_text" field (1500-2500 Korean characters introducing the episode with cinematic detail, emotional depth, and immersive atmosphere)
     2. You MUST generate ALL nodes from depth 0 to depth {story_config.max_depth}
     - Depth 0: 1 starting node (root)
     - Depth 1: 2 nodes (children of the root node)
@@ -125,7 +125,7 @@ async def generate_single_episode(
     {{
       "episode_order": {current_episode_order},
       "title": "Episode Title Here",
-      "intro_text": "🚨 REQUIRED: Write 100-200 words introducing this episode, describing the setting, mood, and context. DO NOT SKIP THIS FIELD!",
+      "intro_text": "🚨 REQUIRED: Write 1500-2500 Korean characters introducing this episode. Include: (1) Strong opening hook, (2) Atmospheric setting with sensory details, (3) Character emotions and inner thoughts, (4) 2-3 meaningful dialogues, (5) Core conflict hint, (6) Transition to choice moment. Make it cinematic and immersive like a movie opening scene. DO NOT SKIP THIS FIELD!",
       "start_node": {{
         "id": "node_0",
         "text": "The story text for the first scene of the episode...",
@@ -138,11 +138,13 @@ async def generate_single_episode(
         "choices": [
             {{
                 "text": "First choice for the player",
-                "tags": ["tag1", "tag2"]
+                "tags": ["tag1", "tag2"],
+                "immediate_reaction": "Immediate reaction when this choice is made (100-200 Korean characters): character reactions, atmosphere change, player emotions..."
             }},
             {{
                 "text": "Second choice for the player",
-                "tags": ["tag3", "tag4"]
+                "tags": ["tag3", "tag4"],
+                "immediate_reaction": "Different immediate reaction for this choice (100-200 Korean characters)..."
             }}
         ],
         "children": [
@@ -203,6 +205,10 @@ async def generate_single_episode(
       * 'npc_emotions': emotional states of NPCs present in this scene (e.g., {{"Romeo": "passionate", "Juliet": "conflicted"}})
       * 'situation': a brief description of what's happening in this scene
       * 'relations_update': any changes in character relationships (can be empty dict if no changes)
+    - Each 'choice' object must include:
+      * 'text': the choice text for the player
+      * 'tags': array of tags (cooperative, aggressive, cautious, trusting, doubtful, brave, fearful, rational, emotional)
+      * 'immediate_reaction': 100-200 Korean characters describing what happens IMMEDIATELY after this choice (character reactions, atmosphere change, player emotions)
     - The 'children' array of a node should contain the nodes that result from the 'choices' of that same node, in the same order.
     - RECURSIVELY generate children nodes for EVERY node until depth {story_config.max_depth} is reached.
     - Do NOT stop at depth 1 or 2. You MUST continue generating until depth {story_config.max_depth}.
@@ -217,7 +223,11 @@ async def generate_single_episode(
         - Use comparison operators: >=, <=, >, <, ==
         - Use logical operators: AND, OR
         - Tags accumulate based on player choices throughout the episode
-      * Provide full ending text (200-400 words) describing the outcome
+      * Provide full ending text (800-1500 Korean characters) with:
+        - Climactic scene showing the result of player choices (300-400 chars)
+        - Character emotional reactions and inner thoughts (200-300 chars)
+        - Explicit mention of player's choice impact: "당신의 선택은..." (200-300 chars)
+        - Emotional closure with hint of what's next (100-200 chars)
       * Include 'gauge_changes' dict with gauge ID keys and integer values (can be positive or negative)
       * Use the EXACT field name "gauge_changes" (with underscore, not camelCase)
 
@@ -227,7 +237,7 @@ async def generate_single_episode(
     - The deepest nodes (at depth {story_config.max_depth}) are leaf nodes with NO choices or children
 
     🚨🚨🚨 VERIFICATION CHECKLIST BEFORE RESPONDING (MANDATORY):
-    ✓ Did I include the "intro_text" field with 100-200 words? (🚨 THIS IS MANDATORY!)
+    ✓ Did I include the "intro_text" field with 1500-2500 Korean characters? (🚨 THIS IS MANDATORY!)
     ✓ Did I generate nodes at ALL depths from 0 to {story_config.max_depth}?
     ✓ Do ALL nodes at depths 0 through {story_config.max_depth - 1} have exactly 2 choices and 2 children?
     ✓ Do ONLY nodes at depth {story_config.max_depth} have empty choices/children arrays?
