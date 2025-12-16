@@ -37,3 +37,4 @@ python main.py
 스크립트는 기본적으로 main.py에 포함된 "파리대왕(Lord of the Flies)"의 예시 텍스트를 사용합니다. main.py를 수정하여 파일(예: my_novel.txt)에서 사용자의 소설 텍스트를 불러와 사용하도록 변경할 수 있습니다.
 
 최종 생성된 스토리는 episode_story.json 파일에 저장됩니다.
+

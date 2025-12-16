@@ -38,7 +38,7 @@ def export_to_markdown(result: Dict, output_path: str = "story_export.md") -> st
         lines.append(f"\n### 에피소드 엔딩")
         for ending in episode.get("endings", []):
             changes = ending.get("gauge_changes", {})
-            change_str = ", ".join([f"{k}: {"+" if v > 0 else ""}{v}" for k, v in changes.items()])
+            change_str = ", ".join([f"{k}: {'+' if v > 0 else ' '}{v}" for k, v in changes.items()])
             lines.append(f"\n#### {ending.get('title', '?')}")
             lines.append(f"- 조건: `{ending.get('condition', '?')}`")
             lines.append(f"- 게이지: {change_str}")
@@ -84,7 +84,7 @@ def export_to_html(result: Dict, output_path: str = "story_export.html") -> str:
         html.append(f"<h3>엔딩</h3>")
         for ending in episode.get("endings", []):
             changes = ending.get("gauge_changes", {})
-            change_str = ", ".join([f"{k}: {"+" if v > 0 else ""}{v}" for k, v in changes.items()])
+            change_str = ", ".join([f"{k}: {'+' if v > 0 else ' '}{v}" for k, v in changes.items()])
             html.append(f"<div class='ending'>")
             html.append(f"<strong>{ending.get('title', '?')}</strong>")
             html.append(f"<p class='gauge'>조건: {ending.get('condition', '?')} | {change_str}</p>")
