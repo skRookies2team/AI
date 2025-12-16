@@ -12,7 +12,7 @@ from botocore.exceptions import ClientError
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from main import main_flow, get_gauges, regenerate_subtree
+from main import main_flow, get_gauges, finalize_analysis, regenerate_subtree
 from storyengine_pkg.generator import generate_single_episode
 from storyengine_pkg.models import (
     StoryConfig,
@@ -254,6 +254,18 @@ class GaugeResponse(BaseModel):
     finalEndings: Optional[List[dict]] = None
 
 
+class FinalizeAnalysisRequest(BaseModel):
+    """사용자가 선택한 게이지를 기반으로 최종 엔딩 생성 요청"""
+    novel_summary: str
+    selected_gauges: List[dict]  # 사용자가 선택한 2-3개의 게이지
+    ending_config: Optional[Dict[str, int]] = None  # {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+
+
+class FinalizeAnalysisResponse(BaseModel):
+    """최종 엔딩 생성 응답"""
+    finalEndings: List[dict]
+
+
 # ============================================
 # API 엔드포인트
 # ============================================
@@ -267,19 +279,16 @@ async def root():
 @app.post("/analyze", response_model=GaugeResponse)
 async def analyze_novel(request: GaugeRequest):
     """
-    소설 분석 - 요약, 캐릭터, 게이지 제안, 최종 엔딩 반환
+    소설 분석 - 요약, 캐릭터, 게이지 제안 반환
 
     프론트엔드에서 게이지 선택 UI를 위해 먼저 호출
-    백엔드는 이 응답의 finalEndings를 endingConfigJson에 저장함
+    이후 사용자가 게이지를 선택하면 /finalize-analysis를 호출하여 최종 엔딩 생성
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
 
     try:
         result = await get_gauges(API_KEY, request.novel_text)
-        # finalEndings가 없으면 에러 로그 출력
-        if not result.get("finalEndings"):
-            print("⚠️ WARNING: /analyze response is missing 'finalEndings' field")
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -289,7 +298,7 @@ async def analyze_novel(request: GaugeRequest):
 async def analyze_novel_file(file: UploadFile = File(...)):
     """
     소설 파일 분석 - txt 파일 업로드
-    요약, 캐릭터, 게이지 제안, 최종 엔딩 반환
+    요약, 캐릭터, 게이지 제안 반환
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -301,14 +310,38 @@ async def analyze_novel_file(file: UploadFile = File(...)):
         content = await file.read()
         novel_text = content.decode('utf-8')
         result = await get_gauges(API_KEY, novel_text)
-        # finalEndings가 없으면 에러 로그 출력
-        if not result.get("finalEndings"):
-            print("⚠️ WARNING: /analyze/file response is missing 'finalEndings' field")
         return result
     except UnicodeDecodeError:
         raise HTTPException(status_code=400, detail="파일 인코딩 오류. UTF-8 파일을 사용하세요.")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/finalize-analysis", response_model=FinalizeAnalysisResponse)
+async def finalize_analysis_endpoint(request: FinalizeAnalysisRequest):
+    """
+    사용자가 게이지를 선택한 후 최종 엔딩 생성
+
+    /analyze로 게이지 제안을 받은 후, 사용자가 2-3개의 게이지를 선택하면
+    이 엔드포인트를 호출하여 선택된 게이지를 기반으로 최종 엔딩을 생성합니다.
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
+
+    # 유효성 검사
+    if not request.selected_gauges or len(request.selected_gauges) < 2:
+        raise HTTPException(status_code=400, detail="최소 2개의 게이지를 선택해야 합니다.")
+
+    try:
+        result = await finalize_analysis(
+            api_key=API_KEY,
+            novel_summary=request.novel_summary,
+            selected_gauges=request.selected_gauges,
+            ending_config=request.ending_config
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"최종 엔딩 생성 실패: {str(e)}")
 
 
 @app.post("/generate")
@@ -484,9 +517,10 @@ async def generate_story_from_file(
 @app.post("/analyze-from-s3")
 async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
     """
-    S3에서 소설 파일을 다운로드하여 분석 (요약, 캐릭터, 게이지, 최종 엔딩)
+    S3에서 소설 파일을 다운로드하여 분석 (요약, 캐릭터, 게이지 제안)
 
     백엔드가 S3에 업로드한 파일을 fileKey로 받아서 분석합니다.
+    이후 /finalize-analysis를 호출하여 최종 엔딩 생성
 
     s3_upload_url이 제공되면:
     - 분석 결과를 Pre-signed URL로 S3에 업로드
@@ -502,12 +536,8 @@ async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
         # 1. S3에서 소설 다운로드
         novel_text = download_from_s3(request.file_key, request.bucket)
 
-        # 2. 분석 (요약, 캐릭터, 게이지, 최종 엔딩)
+        # 2. 분석 (요약, 캐릭터, 게이지 제안)
         result = await get_gauges(API_KEY, novel_text)
-
-        # finalEndings가 없으면 에러 로그 출력
-        if not result.get("finalEndings"):
-            print("⚠️ WARNING: /analyze-from-s3 response is missing 'finalEndings' field")
 
         # 3. Pre-signed URL이 있으면 S3에 업로드하고 fileKey만 반환
         if request.s3_upload_url:

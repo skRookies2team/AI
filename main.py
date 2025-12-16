@@ -195,8 +195,7 @@ async def get_gauges(api_key: str, novel_text: str) -> Dict:
         {
             "summary": 소설 요약,
             "characters": 캐릭터 리스트,
-            "gauges": 제안된 게이지 리스트,
-            "finalEndings": 최종 엔딩 리스트 (추가됨)
+            "gauges": 제안된 게이지 리스트
         }
     """
     director = InteractiveStoryDirector(api_key=api_key)
@@ -210,19 +209,47 @@ async def get_gauges(api_key: str, novel_text: str) -> Dict:
     # 게이지 제안
     gauges = await director.suggest_gauges(novel_summary)
 
-    # 최종 엔딩 설계 (기본값 사용)
-    ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+    return {
+        "summary": novel_summary,
+        "characters": characters,
+        "gauges": gauges
+    }
+
+
+async def finalize_analysis(
+    api_key: str,
+    novel_summary: str,
+    selected_gauges: List[Dict],
+    ending_config: Optional[Dict] = None
+) -> Dict:
+    """
+    사용자가 선택한 게이지를 기반으로 최종 엔딩을 생성하는 함수
+
+    Args:
+        api_key: OpenAI API 키
+        novel_summary: 소설 요약
+        selected_gauges: 사용자가 선택한 게이지 리스트 (2-3개)
+        ending_config: 엔딩 타입별 개수 설정 (기본값: {"happy": 2, "tragic": 1, "neutral": 1, "open": 1})
+
+    Returns:
+        {
+            "finalEndings": 최종 엔딩 리스트
+        }
+    """
+    director = InteractiveStoryDirector(api_key=api_key)
+
+    if ending_config is None:
+        ending_config = {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+
+    # 선택된 게이지만 사용하여 최종 엔딩 설계
     final_endings = await director.design_final_endings(
         novel_summary,
-        gauges, # 모든 제안된 게이지를 사용하여 최종 엔딩 설계
+        selected_gauges,
         ending_config=ending_config
     )
 
     return {
-        "summary": novel_summary,
-        "characters": characters,
-        "gauges": gauges,
-        "finalEndings": final_endings # 최종 엔딩 추가
+        "finalEndings": final_endings
     }
 
 
