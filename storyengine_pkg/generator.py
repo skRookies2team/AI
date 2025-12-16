@@ -9,6 +9,29 @@ from storyengine_pkg.models import (
     EpisodeModel,
 )
 
+
+def _validate_and_clean_node_structure(node: Dict):
+    """
+    Recursively traverses the node tree to ensure 'immediate_reaction' is present in every choice.
+    If missing, adds a default placeholder to prevent downstream errors.
+    """
+    if not isinstance(node, dict):
+        return
+
+    # Ensure choices is a list
+    if "choices" in node and isinstance(node["choices"], list):
+        for choice in node["choices"]:
+            if isinstance(choice, dict):
+                if "immediate_reaction" not in choice or not choice["immediate_reaction"]:
+                    choice["immediate_reaction"] = "..."
+                    print(f"⚠️ Missing 'immediate_reaction' in node {node.get('id', 'N/A')}. Added placeholder.")
+
+    # Recurse through children
+    if "children" in node and isinstance(node["children"], list):
+        for child in node["children"]:
+            _validate_and_clean_node_structure(child)
+
+
 async def generate_single_episode(
     api_key: str,
     initial_analysis: InitialAnalysis,
@@ -241,6 +264,7 @@ async def generate_single_episode(
     ✓ Did I generate nodes at ALL depths from 0 to {story_config.max_depth}?
     ✓ Do ALL nodes at depths 0 through {story_config.max_depth - 1} have exactly 2 choices and 2 children?
     ✓ Do ONLY nodes at depth {story_config.max_depth} have empty choices/children arrays?
+    ✓ Is 'immediate_reaction' present in EVERY choice object?
     ✓ Is the total node count approximately {2 ** (story_config.max_depth + 1) - 1}?
     ✓ Did I generate 2-4 endings with unique 'id' fields (e.g., "ep{current_episode_order}_ending_1")?
     ✓ Do all ending 'condition' fields use TAG-BASED logic (not node paths)?
@@ -260,6 +284,10 @@ async def generate_single_episode(
     print(f"📊 Parsed episode data keys: {generated_episode_data.keys() if isinstance(generated_episode_data, dict) else 'NOT A DICT'}")
     print(f"📊 Has intro_text in parsed data: {'intro_text' in generated_episode_data if isinstance(generated_episode_data, dict) else 'N/A'}")
     print(f"📊 intro_text value: {generated_episode_data.get('intro_text', 'NOT FOUND') if isinstance(generated_episode_data, dict) else 'N/A'}")
+
+    # Validate and clean the generated structure to ensure 'immediate_reaction' exists.
+    if isinstance(generated_episode_data, dict) and generated_episode_data.get("start_node"):
+        _validate_and_clean_node_structure(generated_episode_data["start_node"])
 
     # --- Validate and return the Episode object ---
     try:

@@ -448,10 +448,22 @@ async def _generate_single_node(
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
     "text": "스토리 본문...",
-    "npcEmotions": {{"캐릭터명": "감정"}},
-    "situation": "상황 요약",
-    "tags": ["태그1", "태그2"],
-    "choices": ["선택지1", "선택지2", ...]
+    "details": {{
+        "npcEmotions": {{"캐릭터명": "감정"}},
+        "situation": "상황 요약"
+    }},
+    "choices": [
+        {{
+            "text": "선택지 1",
+            "tags": ["태그1", "태그2"],
+            "immediate_reaction": "선택 1에 대한 즉각적인 반응..."
+        }},
+        {{
+            "text": "선택지 2",
+            "tags": ["태그3", "태그4"],
+            "immediate_reaction": "선택 2에 대한 즉각적인 반응..."
+        }}
+    ]
 }}"""
 
     try:
@@ -462,20 +474,27 @@ async def _generate_single_node(
 
         parsed = director._parse_json(response.content)
 
+        # Ensure details is a dictionary
+        details = parsed.get("details", {})
+        if not isinstance(details, dict):
+            details = {"situation": "Parsing error", "npcEmotions": {}}
+
         return {
             "text": parsed.get("text", "스토리 생성 실패"),
-            "npcEmotions": parsed.get("npcEmotions", {}),
-            "situation": parsed.get("situation", ""),
-            "tags": parsed.get("tags", []),
-            "choices": parsed.get("choices", [])
+            "details": {
+                "npcEmotions": details.get("npcEmotions", {}),
+                "situation": details.get("situation", "")
+            },
+            "choices": parsed.get("choices", [])  # Should be a list of objects
         }
     except Exception as e:
         print(f"    ❌ 노드 생성 실패: {e}")
         return {
             "text": f"[오류로 인해 스토리를 생성할 수 없습니다: {str(e)}]",
-            "npcEmotions": {},
-            "situation": "오류 발생",
-            "tags": [],
+            "details": {
+                "npcEmotions": {},
+                "situation": "오류 발생"
+            },
             "choices": []
         }
 
@@ -517,23 +536,22 @@ async def _generate_child_subtree(
     child_node = {
         "id": node_id,
         "text": node_data.get("text", ""),
-        "choices": node_data.get("choices", []),
+        "choices": node_data.get("choices", []),  # This is now the list of choice objects
         "depth": current_depth,
-        "details": {
-            "situation": node_data.get("situation", ""),
-            "npcEmotions": node_data.get("npcEmotions", {}),
-            "tags": node_data.get("tags", [])
-        },
+        "details": node_data.get("details", {}),  # Use the nested details object directly
         "children": []
     }
 
     # 재귀적으로 자식 노드의 자식들 생성 (max_depth 도달 전까지)
     if current_depth < max_depth and node_data.get("choices"):
-        for sub_choice in node_data.get("choices", []):
+        for sub_choice_obj in node_data.get("choices", []):
+            # Pass the text of the choice object to the recursive call
+            sub_choice_text = sub_choice_obj.get("text") if isinstance(sub_choice_obj, dict) else sub_choice_obj
+
             sub_children = await _generate_child_subtree(
                 director=director,
                 parent_text=child_node["text"],
-                choice_text=sub_choice,
+                choice_text=sub_choice_text,
                 current_depth=current_depth + 1,
                 max_depth=max_depth,
                 context=context
