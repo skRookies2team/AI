@@ -18,13 +18,15 @@ def _validate_and_clean_node_structure(node: Dict):
     if not isinstance(node, dict):
         return
 
-    # Ensure choices is a list
+    # Validate 'immediate_reaction' in choices - raise error if missing
     if "choices" in node and isinstance(node["choices"], list):
-        for choice in node["choices"]:
+        for idx, choice in enumerate(node["choices"]):
             if isinstance(choice, dict):
-                if "immediate_reaction" not in choice or not choice["immediate_reaction"]:
-                    choice["immediate_reaction"] = "..."
-                    print(f"⚠️ Missing 'immediate_reaction' in node {node.get('id', 'N/A')}. Added placeholder.")
+                reaction = choice.get("immediate_reaction", "").strip()
+                if not reaction:
+                    raise ValueError(f"Node {node.get('id', 'N/A')}, Choice {idx+1}: 'immediate_reaction' is missing!")
+                if len(reaction) < 20:
+                    raise ValueError(f"Node {node.get('id', 'N/A')}, Choice {idx+1}: 'immediate_reaction' too short (len={len(reaction)}, minimum 20 required)!")
 
     # Recurse through children
     if "children" in node and isinstance(node["children"], list):

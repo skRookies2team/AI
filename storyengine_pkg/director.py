@@ -754,19 +754,26 @@ class InteractiveStoryDirector:
    - 각 선택지에 특성 태그 포함 (1~2개씩)
    - 사용 가능한 태그: cooperative, aggressive, cautious, trusting, doubtful, brave, fearful, rational, emotional
 
-   🎭 **즉각 반응 (immediate_reaction)** - 각 선택지마다 필수 작성 (100-200자):
+   🎭 **즉각 반응 (immediate_reaction)** - ⚠️ 모든 선택지마다 MANDATORY 필수 작성 (100-200자):
    - 플레이어가 이 선택을 했을 때 **즉시** 벌어지는 일
    - 캐릭터들의 첫 반응 (표정, 몸짓, 짧은 말)
    - 분위기의 변화 (긴장감 상승/하강, 온도감 변화)
    - 플레이어의 내적 감정 (후회, 확신, 불안 등)
    - 다음 장면으로 넘어가기 전 짧은 "숨고르기" 제공
 
-   예시:
-   "당신이 한 걸음 앞으로 나서자 잭의 눈빛이 날카로워졌다. 다른 아이들이 숨을 죽였다.
-   긴장이 고조되는 순간, 당신은 자신의 선택이 돌이킬 수 없는 결과를 가져올 수도 있다는
-   것을 깨달았다."
+   ⚠️ CRITICAL: immediate_reaction이 없거나 비어있으면 절대 안 됩니다! 반드시 각 선택지마다 100자 이상으로 작성하세요!
+
+   예시 1 (협력적 선택):
+   "당신이 손을 내밀자 그의 경계심이 조금 풀리는 것이 보였다. '믿어도 되는 걸까?' 그가 낮게 중얼거렸다.
+   주변 사람들의 시선이 당신에게 집중되었고, 공기 중의 긴장감이 미묘하게 완화되는 느낌이 들었다."
+
+   예시 2 (공격적 선택):
+   "당신의 날카로운 말에 그의 표정이 굳어졌다. 주먹을 불끈 쥔 그가 한 발짝 다가섰다.
+   주변 공기가 얼어붙었고, 당신은 이 선택이 돌이킬 수 없는 갈등을 불러올 수 있다는 것을 직감했다."
 
 {"⚠️ 이것은 에피소드 엔딩으로 연결되는 노드입니다. 스토리를 적절히 마무리하고 선택지는 빈 배열로 두세요." if node_type == "ending" else ""}
+
+⚠️ CRITICAL: 모든 선택지에 immediate_reaction을 100-200자로 반드시 포함하세요!
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
@@ -778,17 +785,19 @@ class InteractiveStoryDirector:
     }},
     "choices": [
         {{
-            "text": "선택지 텍스트",
+            "text": "그에게 손을 내밀며 협력을 제안한다",
             "tags": ["cooperative", "trusting"],
-            "immediate_reaction": "선택 직후 즉각 반응 (100-200자): 캐릭터 반응, 분위기 변화, 플레이어 감정..."
+            "immediate_reaction": "당신이 손을 내밀자 그의 눈빛이 잠시 흔들렸다. '정말... 믿어도 되는 건가?' 그가 조심스럽게 당신의 손을 바라보았다. 주변 사람들의 숨소리가 멈춘 듯 고요했고, 공기 중의 긴장감이 미묘하게 풀리는 것을 느낄 수 있었다."
         }},
         {{
-            "text": "다른 선택지",
-            "tags": ["aggressive", "doubtful"],
-            "immediate_reaction": "다른 선택의 즉각 반응 (100-200자)..."
+            "text": "그의 약점을 지적하며 압박한다",
+            "tags": ["aggressive", "rational"],
+            "immediate_reaction": "당신의 날카로운 지적에 그의 얼굴이 창백해졌다. 주먹을 불끈 쥔 그가 이를 악물었다. '이 자식이...' 그가 낮게 중얼거렸고, 주변 공기가 한순간 얼어붙었다. 당신은 돌이킬 수 없는 선을 넘었다는 것을 직감했다."
         }}
     ]
-}}"""
+}}
+
+⚠️ 다시 한번 강조: immediate_reaction 필드를 절대 빠뜨리지 마세요! 각 선택마다 100자 이상 필수입니다!"""
 
         try:
             response = await self.llm.ainvoke([
@@ -797,6 +806,23 @@ class InteractiveStoryDirector:
             ])
 
             parsed = self._parse_json(response.content)
+
+            # DEBUG: LLM 응답 로깅
+            print(f"🔍 DEBUG - LLM Response choices:")
+            if "choices" in parsed and isinstance(parsed["choices"], list):
+                for idx, choice in enumerate(parsed["choices"]):
+                    reaction = choice.get("immediate_reaction", "NOT_FOUND")
+                    print(f"  Choice {idx+1}: immediate_reaction = {reaction}")
+
+            # immediate_reaction 검증 - 없으면 에러
+            if "choices" in parsed and isinstance(parsed["choices"], list):
+                for idx, choice in enumerate(parsed["choices"]):
+                    if isinstance(choice, dict):
+                        reaction = choice.get("immediate_reaction", "").strip()
+                        if not reaction:
+                            raise ValueError(f"Choice {idx+1} is missing 'immediate_reaction' field!")
+                        if len(reaction) < 20:
+                            raise ValueError(f"Choice {idx+1} has too short 'immediate_reaction' (len={len(reaction)}, minimum 20 chars required)!")
 
             # 노드 ID 생성
             node_id = str(uuid.uuid4())[:8]
