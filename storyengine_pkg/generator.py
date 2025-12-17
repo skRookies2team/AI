@@ -283,6 +283,13 @@ async def generate_single_episode(
     print(f"🤖 LLM Response content (first 1000 chars): {response.content[:1000]}")
 
     generated_episode_data = director._parse_json(response.content)
+
+    # Check if parsing was successful
+    if generated_episode_data is None:
+        print("❌ CRITICAL ERROR: Failed to parse LLM response as JSON!")
+        print(f"❌ LLM Response content (full): {response.content}")
+        raise RuntimeError("LLM response parsing failed - received None")
+
     print(f"📊 Parsed episode data keys: {generated_episode_data.keys() if isinstance(generated_episode_data, dict) else 'NOT A DICT'}")
     print(f"📊 Has intro_text in parsed data: {'intro_text' in generated_episode_data if isinstance(generated_episode_data, dict) else 'N/A'}")
     print(f"📊 intro_text value: {generated_episode_data.get('intro_text', 'NOT FOUND') if isinstance(generated_episode_data, dict) else 'N/A'}")
@@ -294,7 +301,7 @@ async def generate_single_episode(
     # --- Validate and return the Episode object ---
     try:
         # Convert start_node to nodes array if necessary (for backend compatibility)
-        if "start_node" in generated_episode_data and "nodes" not in generated_episode_data:
+        if isinstance(generated_episode_data, dict) and "start_node" in generated_episode_data and "nodes" not in generated_episode_data:
             print("🔄 Converting start_node to nodes array for backend compatibility")
             generated_episode_data["nodes"] = [generated_episode_data["start_node"]]
 
