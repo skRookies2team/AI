@@ -1,16 +1,25 @@
 import os
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from dotenv import load_dotenv
 import boto3
 import requests
 import httpx
 import json
 from botocore.exceptions import ClientError
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
-from main import main_flow, get_gauges
+from main import main_flow, get_gauges, finalize_analysis, regenerate_subtree
+from storyengine_pkg.generator import generate_single_episode
+from storyengine_pkg.models import (
+    StoryConfig,
+    InitialAnalysis,
+    EpisodeModel as Episode,  # Rename to avoid conflict with TypedDict
+    GenerateNextEpisodeRequest,
+)
 
 load_dotenv()
 
@@ -94,12 +103,55 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Validation Error Handler (422 에러 상세 로깅)
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request, exc: RequestValidationError):
+    print("=" * 80)
+    print("🚨 422 VALIDATION ERROR 발생!")
+    print(f"📍 URL: {request.url}")
+    print(f"📍 Method: {request.method}")
+    print("=" * 80)
+    print("❌ Validation Errors:")
+    for error in exc.errors():
+        print(f"  - Location: {error['loc']}")
+        print(f"    Message: {error['msg']}")
+        print(f"    Type: {error['type']}")
+        if 'input' in error:
+            print(f"    Input: {error['input']}")
+        print()
+    print("=" * 80)
+
+    # 클라이언트에게도 상세한 에러 반환
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": exc.errors(),
+            "body": await request.body() if hasattr(request, 'body') else None
+        }
+    )
+
 API_KEY = os.environ.get("OPENAI_API_KEY")
 
 
 # ============================================
 # Request/Response 모델
 # ============================================
+
+class GaugeInfo(BaseModel):
+    id: str
+    name: str
+    meaning: str
+    min_label: str
+    max_label: str
+    description: Optional[str] = None
+
+
+class CharacterInfo(BaseModel):
+    name: str
+    aliases: List[str]
+    description: str
+    relationships: List[str]
+
 
 class GaugeRequest(BaseModel):
     novel_text: str
@@ -118,10 +170,13 @@ class EndingConfig(BaseModel):
 class GenerateRequest(BaseModel):
     novel_text: str
     selected_gauge_ids: List[str]  # 선택한 게이지 ID 2개
+    selected_gauges: Optional[List[GaugeInfo]] = None  # 게이지 전체 정보 (옵션)
     num_episodes: int = 3
     max_depth: int = 3  # 2~5
     ending_config: Optional[EndingConfig] = None  # 엔딩 타입별 개수
     num_episode_endings: int = 3  # 에피소드별 엔딩 개수
+    file_key: Optional[str] = None  # S3 파일 키 (옵션)
+    s3_upload_url: Optional[str] = None  # S3 업로드 Pre-signed URL (옵션)
 
 
 class AnalyzeFromS3Request(BaseModel):
@@ -146,26 +201,69 @@ class GenerateFromS3Request(BaseModel):
     num_episode_endings: int = 3
 
 
-class GaugeInfo(BaseModel):
+class ParentNodeInfo(BaseModel):
+    """재생성할 부모 노드 정보"""
+    nodeId: str
+    text: str
+    choices: List[str]
+    situation: Optional[str] = None
+    npcEmotions: Optional[Dict[str, str]] = None
+    tags: Optional[List[str]] = None
+    depth: int
+
+
+class SubtreeRegenerationRequest(BaseModel):
+    """서브트리 재생성 요청"""
+    episodeTitle: str
+    episodeOrder: int
+    parentNode: ParentNodeInfo
+    currentDepth: int
+    maxDepth: int
+    novelContext: str
+    previousChoices: List[str] = []
+    selectedGaugeIds: List[str]
+
+    # 캐싱된 분석 결과 (성능 최적화)
+    summary: Optional[str] = None
+    charactersJson: Optional[str] = None
+    gaugesJson: Optional[str] = None
+
+
+class RegeneratedNode(BaseModel):
+    """재생성된 노드"""
     id: str
-    name: str
-    meaning: str
-    min_label: str
-    max_label: str
-    description: str
+    text: str
+    choices: List[str]
+    depth: int
+    details: Optional[Dict] = None
+    children: List[Any] = []
 
 
-class CharacterInfo(BaseModel):
-    name: str
-    aliases: List[str]
-    description: str
-    relationships: List[str]
+class SubtreeRegenerationResponse(BaseModel):
+    """서브트리 재생성 응답"""
+    status: str
+    message: str
+    regeneratedNodes: List[Dict]
+    totalNodesRegenerated: int
 
 
 class GaugeResponse(BaseModel):
     summary: str
     characters: List[dict]
     gauges: List[dict]
+    finalEndings: Optional[List[dict]] = None
+
+
+class FinalizeAnalysisRequest(BaseModel):
+    """사용자가 선택한 게이지를 기반으로 최종 엔딩 생성 요청"""
+    novel_summary: str
+    selected_gauges: List[dict]  # 사용자가 선택한 2-3개의 게이지
+    ending_config: Optional[Dict[str, int]] = None  # {"happy": 2, "tragic": 1, "neutral": 1, "open": 1}
+
+
+class FinalizeAnalysisResponse(BaseModel):
+    """최종 엔딩 생성 응답"""
+    finalEndings: List[dict]
 
 
 # ============================================
@@ -184,6 +282,7 @@ async def analyze_novel(request: GaugeRequest):
     소설 분석 - 요약, 캐릭터, 게이지 제안 반환
 
     프론트엔드에서 게이지 선택 UI를 위해 먼저 호출
+    이후 사용자가 게이지를 선택하면 /finalize-analysis를 호출하여 최종 엔딩 생성
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -199,6 +298,7 @@ async def analyze_novel(request: GaugeRequest):
 async def analyze_novel_file(file: UploadFile = File(...)):
     """
     소설 파일 분석 - txt 파일 업로드
+    요약, 캐릭터, 게이지 제안 반환
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -217,16 +317,39 @@ async def analyze_novel_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/finalize-analysis", response_model=FinalizeAnalysisResponse)
+async def finalize_analysis_endpoint(request: FinalizeAnalysisRequest):
+    """
+    사용자가 게이지를 선택한 후 최종 엔딩 생성
+
+    /analyze로 게이지 제안을 받은 후, 사용자가 2-3개의 게이지를 선택하면
+    이 엔드포인트를 호출하여 선택된 게이지를 기반으로 최종 엔딩을 생성합니다.
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
+
+    # 유효성 검사
+    if not request.selected_gauges or len(request.selected_gauges) < 2:
+        raise HTTPException(status_code=400, detail="최소 2개의 게이지를 선택해야 합니다.")
+
+    try:
+        result = await finalize_analysis(
+            api_key=API_KEY,
+            novel_summary=request.novel_summary,
+            selected_gauges=request.selected_gauges,
+            ending_config=request.ending_config
+        )
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"최종 엔딩 생성 실패: {str(e)}")
+
+
 @app.post("/generate")
 async def generate_story(request: GenerateRequest):
     """
-    인터랙티브 스토리 생성
+    스토리 생성 - relay-server에서 호출
 
-    Parameters:
-    - novel_text: 소설 텍스트
-    - selected_gauge_ids: 선택한 게이지 ID 리스트 (2개)
-    - num_episodes: 에피소드 개수 (기본값: 3)
-    - max_depth: 트리 깊이 (기본값: 3, 범위: 2~5)
+    novelText를 받아서 스토리를 생성하고, s3_upload_url이 있으면 S3에 업로드
     """
     if not API_KEY:
         raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
@@ -256,7 +379,8 @@ async def generate_story(request: GenerateRequest):
             # 0인 항목 제거
             ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
 
-        result = await main_flow(
+        print(f"🎬 스토리 생성 시작 (에피소드: {request.num_episodes}, 깊이: {request.max_depth})")
+        story_data = await main_flow(
             api_key=API_KEY,
             novel_text=request.novel_text,
             selected_gauge_ids=request.selected_gauge_ids,
@@ -265,9 +389,70 @@ async def generate_story(request: GenerateRequest):
             ending_config=ending_config_dict,
             num_episode_endings=request.num_episode_endings
         )
-        return result
+        print(f"✅ 스토리 생성 완료")
+
+        # Pre-signed URL이 있으면 S3에 업로드하고 메타데이터만 반환
+        if request.s3_upload_url:
+            print(f"📤 S3에 업로드 시작")
+            await upload_to_presigned_url(request.s3_upload_url, story_data)
+            print(f"✅ S3 업로드 완료")
+
+            # 메타데이터 추출
+            metadata = extract_metadata(story_data)
+
+            # 메타데이터만 반환 (경량 응답)
+            return {
+                "status": "success",
+                "file_key": request.file_key or "unknown",
+                "data": {
+                    "metadata": metadata
+                }
+            }
+        else:
+            # Pre-signed URL이 없으면 전체 데이터 반환 (기존 방식)
+            return {
+                "status": "success",
+                "data": story_data
+            }
+
     except Exception as e:
+        import traceback
+        error_detail = f"Story generation failed: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ 오류 발생:\n{error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
+
+@app.post("/generate-next-episode", response_model=Episode)
+async def generate_next_episode_endpoint(request: GenerateNextEpisodeRequest):
+    """
+    Generates a single episode sequentially.
+    """
+    print("=" * 60)
+    print("📥 /generate-next-episode 요청 수신")
+    print(f"  - Current Episode Order: {request.current_episode_order}")
+    print(f"  - Story Config: {request.story_config}")
+    print(f"  - Has Previous Episode: {request.previous_episode is not None}")
+    print("=" * 60)
+
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
+
+    try:
+        newly_generated_episode = await generate_single_episode(
+            api_key=API_KEY,
+            initial_analysis=request.initial_analysis,
+            story_config=request.story_config,
+            novel_context=request.novel_context,
+            current_episode_order=request.current_episode_order,
+            previous_episode_data=request.previous_episode
+        )
+        return newly_generated_episode
+    except Exception as e:
+        print(f"❌ 에러 발생: {str(e)}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 @app.post("/generate/file")
@@ -332,9 +517,10 @@ async def generate_story_from_file(
 @app.post("/analyze-from-s3")
 async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
     """
-    S3에서 소설 파일을 다운로드하여 분석
+    S3에서 소설 파일을 다운로드하여 분석 (요약, 캐릭터, 게이지 제안)
 
     백엔드가 S3에 업로드한 파일을 fileKey로 받아서 분석합니다.
+    이후 /finalize-analysis를 호출하여 최종 엔딩 생성
 
     s3_upload_url이 제공되면:
     - 분석 결과를 Pre-signed URL로 S3에 업로드
@@ -350,7 +536,7 @@ async def analyze_novel_from_s3(request: AnalyzeFromS3Request):
         # 1. S3에서 소설 다운로드
         novel_text = download_from_s3(request.file_key, request.bucket)
 
-        # 2. 분석 (요약, 캐릭터, 게이지)
+        # 2. 분석 (요약, 캐릭터, 게이지 제안)
         result = await get_gauges(API_KEY, novel_text)
 
         # 3. Pre-signed URL이 있으면 S3에 업로드하고 fileKey만 반환
@@ -394,7 +580,9 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
         raise HTTPException(status_code=400, detail="에피소드 개수는 1 이상이어야 합니다.")
 
     try:
+        print(f"📥 S3에서 파일 다운로드 시작: {request.file_key}")
         novel_text = download_from_s3(request.file_key, request.bucket)
+        print(f"✅ 다운로드 완료 (텍스트 길이: {len(novel_text)}자)")
 
         # ending_config 변환
         ending_config_dict = None
@@ -410,6 +598,7 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
             ending_config_dict = {k: v for k, v in ending_config_dict.items() if v > 0}
 
         # 기존 생성 로직 재사용
+        print(f"🎬 스토리 생성 시작 (에피소드: {request.num_episodes}, 깊이: {request.max_depth})")
         story_data = await main_flow(
             api_key=API_KEY,
             novel_text=novel_text,
@@ -419,10 +608,13 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
             ending_config=ending_config_dict,
             num_episode_endings=request.num_episode_endings
         )
+        print(f"✅ 스토리 생성 완료")
 
         # Pre-signed URL이 있으면 S3에 업로드하고 메타데이터만 반환
         if request.s3_upload_url:
+            print(f"📤 S3에 업로드 시작")
             await upload_to_presigned_url(request.s3_upload_url, story_data)
+            print(f"✅ S3 업로드 완료")
 
             # 메타데이터 추출
             metadata = extract_metadata(story_data)
@@ -443,7 +635,171 @@ async def generate_story_from_s3(request: GenerateFromS3Request):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Story generation failed: {str(e)}")
+        import traceback
+        error_detail = f"Story generation failed: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ 오류 발생:\n{error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
+
+
+@app.post("/regenerate-subtree", response_model=SubtreeRegenerationResponse)
+async def regenerate_node_subtree(request: SubtreeRegenerationRequest):
+    """
+    수정된 부모 노드를 기반으로 하위 서브트리를 재생성합니다.
+
+    Top-Down 방식으로 상위 노드 수정 시 하위 노드들을 새로운 내용에 맞춰 재생성합니다.
+    """
+    if not API_KEY:
+        raise HTTPException(status_code=500, detail="API 키가 설정되지 않았습니다.")
+
+    try:
+        print(f"🔄 서브트리 재생성 요청 받음")
+        print(f"  에피소드: {request.episodeTitle} (#{request.episodeOrder})")
+        print(f"  부모 노드: {request.parentNode.nodeId} (depth {request.currentDepth}/{request.maxDepth})")
+
+        # 부모 노드 정보를 Dict로 변환
+        parent_node_dict = {
+            "nodeId": request.parentNode.nodeId,
+            "text": request.parentNode.text,
+            "choices": request.parentNode.choices,
+            "situation": request.parentNode.situation,
+            "npcEmotions": request.parentNode.npcEmotions,
+            "tags": request.parentNode.tags,
+            "depth": request.parentNode.depth
+        }
+
+        # 서브트리 재생성 실행 (캐시된 정보 활용)
+        result = await regenerate_subtree(
+            api_key=API_KEY,
+            parent_node=parent_node_dict,
+            novel_context=request.novelContext,
+            selected_gauge_ids=request.selectedGaugeIds,
+            current_depth=request.currentDepth,
+            max_depth=request.maxDepth,
+            episode_title=request.episodeTitle,
+            previous_choices=request.previousChoices,
+            # 캐싱된 정보 전달 (새로 분석 건너뛰기)
+            cached_summary=request.summary,
+            cached_characters_json=request.charactersJson,
+            cached_gauges_json=request.gaugesJson
+        )
+
+        print(f"✅ 서브트리 재생성 완료: {result['totalNodesRegenerated']}개 노드")
+
+        return SubtreeRegenerationResponse(
+            status=result["status"],
+            message=result["message"],
+            regeneratedNodes=result["regeneratedNodes"],
+            totalNodesRegenerated=result["totalNodesRegenerated"]
+        )
+
+    except Exception as e:
+        import traceback
+        error_detail = f"Subtree regeneration failed: {str(e)}\n{traceback.format_exc()}"
+        print(f"❌ 서브트리 재생성 오류:\n{error_detail}")
+        raise HTTPException(status_code=500, detail=error_detail)
+
+
+@app.post("/determine-episode-ending")
+async def determine_episode_ending_endpoint(request: Dict):
+    """
+    에피소드 엔딩 판정
+
+    Request:
+    {
+        "choices_made": [{"text": "...", "tags": ["cooperative", "trusting"]}],
+        "endings": [
+            {
+                "id": "ep1_ending_1",
+                "title": "...",
+                "condition": "cooperative >= 2",
+                "text": "...",
+                "gauge_changes": {"hope": 10}
+            }
+        ]
+    }
+
+    Response:
+    {
+        "ending": {...},
+        "tag_scores": {"cooperative": 2, "trusting": 1}
+    }
+    """
+    from storyengine_pkg.utils import determine_episode_ending, calculate_tag_scores
+
+    try:
+        choices_made = request.get("choices_made", [])
+        endings = request.get("endings", [])
+
+        tag_scores = calculate_tag_scores(choices_made)
+        ending = determine_episode_ending(choices_made, endings)
+
+        return {
+            "ending": ending,
+            "tag_scores": tag_scores
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/calculate-final-ending")
+async def calculate_final_ending_endpoint(request: Dict):
+    """
+    최종 엔딩 판정
+
+    Request:
+    {
+        "episode_results": [
+            {
+                "ending": {
+                    "gauge_changes": {"hope": 10, "trust": 5}
+                }
+            }
+        ],
+        "final_endings": [
+            {
+                "id": "ending_hope",
+                "type": "happy",
+                "title": "...",
+                "condition": "hope >= 70 AND trust >= 60",
+                "summary": "..."
+            }
+        ],
+        "initial_gauges": {"hope": 50, "trust": 50}
+    }
+
+    Response:
+    {
+        "final_gauges": {"hope": 60, "trust": 55},
+        "ending": {...}
+    }
+    """
+    from storyengine_pkg.utils import calculate_final_ending
+
+    try:
+        episode_results = request.get("episode_results", [])
+        final_endings = request.get("final_endings", [])
+        initial_gauges = request.get("initial_gauges")
+
+        result = calculate_final_ending(episode_results, final_endings, initial_gauges)
+
+        return {
+            "final_gauges": result.get("gauges"),
+            "ending": result.get("ending")
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for relay server
+    """
+    return {
+        "status": "healthy",
+        "service": "AI Story Generation Server",
+        "version": "1.0.0"
+    }
 
 
 # ============================================
