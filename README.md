@@ -38,3 +38,4 @@ python main.py
 
 최종 생성된 스토리는 episode_story.json 파일에 저장됩니다.
 
+# test
