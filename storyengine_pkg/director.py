@@ -793,9 +793,17 @@ class InteractiveStoryDirector:
             "text": "그의 약점을 지적하며 압박한다",
             "tags": ["aggressive", "rational"],
             "immediate_reaction": "당신의 날카로운 지적에 그의 얼굴이 창백해졌다. 주먹을 불끈 쥔 그가 이를 악물었다. '이 자식이...' 그가 낮게 중얼거렸고, 주변 공기가 한순간 얼어붙었다. 당신은 돌이킬 수 없는 선을 넘었다는 것을 직감했다."
+        }},
+        {{
+            "text": "세 번째 선택지 예시",
+            "tags": ["cautious", "emotional"],
+            "immediate_reaction": "⚠️ 모든 선택지에 immediate_reaction 필드가 반드시 있어야 합니다! 절대 빠뜨리지 마세요!"
         }}
     ]
 }}
+
+⚠️⚠️⚠️ 중요: 위 JSON의 모든 choice 객체에 immediate_reaction 필드가 있는 것을 확인하세요!
+선택지가 2개든 3개든 4개든, 모든 선택지마다 immediate_reaction을 반드시 작성하세요!
 
 ⚠️ 다시 한번 강조: immediate_reaction 필드를 절대 빠뜨리지 마세요! 각 선택마다 100자 이상 필수입니다!"""
 
