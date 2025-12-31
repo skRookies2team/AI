@@ -13,20 +13,20 @@ from storyengine_pkg.models import (
 def _validate_and_clean_node_structure(node: Dict):
     """
     Recursively traverses the node tree to ensure 'immediate_reaction' is present in every choice.
-    If missing, adds a default placeholder to prevent downstream errors.
+    Structured Output 모드를 사용하므로 경고만 출력하고 에러는 발생시키지 않음.
     """
     if not isinstance(node, dict):
         return
 
-    # Validate 'immediate_reaction' in choices - raise error if missing
+    # Validate 'immediate_reaction' in choices - 경고만 출력
     if "choices" in node and isinstance(node["choices"], list):
         for idx, choice in enumerate(node["choices"]):
             if isinstance(choice, dict):
                 reaction = choice.get("immediate_reaction", "").strip()
                 if not reaction:
-                    raise ValueError(f"Node {node.get('id', 'N/A')}, Choice {idx+1}: 'immediate_reaction' is missing!")
-                if len(reaction) < 20:
-                    raise ValueError(f"Node {node.get('id', 'N/A')}, Choice {idx+1}: 'immediate_reaction' too short (len={len(reaction)}, minimum 20 required)!")
+                    print(f"  ⚠️ Node {node.get('id', 'N/A')}, Choice {idx+1}: 'immediate_reaction' is missing (Structured Output should prevent this)")
+                elif len(reaction) < 20:
+                    print(f"  ℹ️ Node {node.get('id', 'N/A')}, Choice {idx+1}: 'immediate_reaction' 짧음 ({len(reaction)}자)")
 
     # Recurse through children
     if "children" in node and isinstance(node["children"], list):
