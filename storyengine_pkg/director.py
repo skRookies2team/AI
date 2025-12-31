@@ -5,9 +5,10 @@ import uuid
 from typing import TypedDict, List, Dict, Any, Annotated, Optional
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.output_parsers import JsonOutputParser, PydanticOutputParser
 from langgraph.graph import StateGraph, END, START
 from langgraph.types import Send
+from pydantic import BaseModel, Field
 
 from storyengine_pkg.models import (
     Character,
@@ -20,6 +21,26 @@ from storyengine_pkg.models import (
     StoryNodeDetail,
 )
 
+# Structured Output을 위한 Pydantic 스키마
+class StoryChoiceSchema(BaseModel):
+    """선택지 스키마 - immediate_reaction 필수"""
+    text: str = Field(description="선택지 텍스트 (80-200자)")
+    tags: List[str] = Field(description="게이지에 영향을 주는 태그 리스트")
+    immediate_reaction: str = Field(
+        description="선택 직후의 즉각적인 반응 묘사 (100-200자). 반드시 포함되어야 하며 비워둘 수 없음.",
+        min_length=50  # 최소 50자 강제
+    )
+
+class StoryNodeSchema(BaseModel):
+    """스토리 노드 스키마 - Structured Output용"""
+    text: str = Field(description="스토리 본문 (1200-2000자)")
+    details: Dict[str, Any] = Field(description="디테일 정보 (npc_emotions, situation, relations_update)")
+    choices: List[StoryChoiceSchema] = Field(
+        description="선택지 리스트 (2-4개). 모든 선택지는 immediate_reaction 필드를 반드시 포함해야 함.",
+        min_items=2,
+        max_items=4
+    )
+
 # ==============================================================================
 # 2. 메인 클래스: 인터랙티브 스토리 디렉터
 # ==============================================================================
@@ -27,6 +48,8 @@ from storyengine_pkg.models import (
 class InteractiveStoryDirector:
     def __init__(self, api_key: str):
         self.llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.7, api_key=api_key)
+        # Structured Output용 LLM (JSON Schema 강제 모드)
+        self.structured_llm = self.llm.with_structured_output(StoryNodeSchema)
         self.json_parser = JsonOutputParser()
 
     # --------------------------------------------------------------------------
@@ -754,19 +777,26 @@ class InteractiveStoryDirector:
    - 각 선택지에 특성 태그 포함 (1~2개씩)
    - 사용 가능한 태그: cooperative, aggressive, cautious, trusting, doubtful, brave, fearful, rational, emotional
 
-   🎭 **즉각 반응 (immediate_reaction)** - 각 선택지마다 필수 작성 (100-200자):
+   🎭 **즉각 반응 (immediate_reaction)** - ⚠️ 모든 선택지마다 MANDATORY 필수 작성 (100-200자):
    - 플레이어가 이 선택을 했을 때 **즉시** 벌어지는 일
    - 캐릭터들의 첫 반응 (표정, 몸짓, 짧은 말)
    - 분위기의 변화 (긴장감 상승/하강, 온도감 변화)
    - 플레이어의 내적 감정 (후회, 확신, 불안 등)
    - 다음 장면으로 넘어가기 전 짧은 "숨고르기" 제공
 
-   예시:
-   "당신이 한 걸음 앞으로 나서자 잭의 눈빛이 날카로워졌다. 다른 아이들이 숨을 죽였다.
-   긴장이 고조되는 순간, 당신은 자신의 선택이 돌이킬 수 없는 결과를 가져올 수도 있다는
-   것을 깨달았다."
+   ⚠️ CRITICAL: immediate_reaction이 없거나 비어있으면 절대 안 됩니다! 반드시 각 선택지마다 100자 이상으로 작성하세요!
+
+   예시 1 (협력적 선택):
+   "당신이 손을 내밀자 그의 경계심이 조금 풀리는 것이 보였다. '믿어도 되는 걸까?' 그가 낮게 중얼거렸다.
+   주변 사람들의 시선이 당신에게 집중되었고, 공기 중의 긴장감이 미묘하게 완화되는 느낌이 들었다."
+
+   예시 2 (공격적 선택):
+   "당신의 날카로운 말에 그의 표정이 굳어졌다. 주먹을 불끈 쥔 그가 한 발짝 다가섰다.
+   주변 공기가 얼어붙었고, 당신은 이 선택이 돌이킬 수 없는 갈등을 불러올 수 있다는 것을 직감했다."
 
 {"⚠️ 이것은 에피소드 엔딩으로 연결되는 노드입니다. 스토리를 적절히 마무리하고 선택지는 빈 배열로 두세요." if node_type == "ending" else ""}
+
+⚠️ CRITICAL: 모든 선택지에 immediate_reaction을 100-200자로 반드시 포함하세요!
 
 반드시 아래 JSON 형식으로만 응답하세요:
 {{
@@ -778,25 +808,45 @@ class InteractiveStoryDirector:
     }},
     "choices": [
         {{
-            "text": "선택지 텍스트",
+            "text": "그에게 손을 내밀며 협력을 제안한다",
             "tags": ["cooperative", "trusting"],
-            "immediate_reaction": "선택 직후 즉각 반응 (100-200자): 캐릭터 반응, 분위기 변화, 플레이어 감정..."
+            "immediate_reaction": "당신이 손을 내밀자 그의 눈빛이 잠시 흔들렸다. '정말... 믿어도 되는 건가?' 그가 조심스럽게 당신의 손을 바라보았다. 주변 사람들의 숨소리가 멈춘 듯 고요했고, 공기 중의 긴장감이 미묘하게 풀리는 것을 느낄 수 있었다."
         }},
         {{
-            "text": "다른 선택지",
-            "tags": ["aggressive", "doubtful"],
-            "immediate_reaction": "다른 선택의 즉각 반응 (100-200자)..."
+            "text": "그의 약점을 지적하며 압박한다",
+            "tags": ["aggressive", "rational"],
+            "immediate_reaction": "당신의 날카로운 지적에 그의 얼굴이 창백해졌다. 주먹을 불끈 쥔 그가 이를 악물었다. '이 자식이...' 그가 낮게 중얼거렸고, 주변 공기가 한순간 얼어붙었다. 당신은 돌이킬 수 없는 선을 넘었다는 것을 직감했다."
+        }},
+        {{
+            "text": "세 번째 선택지 예시",
+            "tags": ["cautious", "emotional"],
+            "immediate_reaction": "⚠️ 모든 선택지에 immediate_reaction 필드가 반드시 있어야 합니다! 절대 빠뜨리지 마세요!"
         }}
     ]
-}}"""
+}}
+
+⚠️⚠️⚠️ 중요: 위 JSON의 모든 choice 객체에 immediate_reaction 필드가 있는 것을 확인하세요!
+선택지가 2개든 3개든 4개든, 모든 선택지마다 immediate_reaction을 반드시 작성하세요!
+
+⚠️ 다시 한번 강조: immediate_reaction 필드를 절대 빠뜨리지 마세요! 각 선택마다 100자 이상 필수입니다!"""
 
         try:
-            response = await self.llm.ainvoke([
+            # Structured Output 모드로 LLM 호출 (JSON Schema 강제)
+            print("  🔧 Structured Output 모드로 노드 생성 중...")
+            structured_response = await self.structured_llm.ainvoke([
                 SystemMessage(content=system_prompt),
                 HumanMessage(content=user_prompt)
             ])
 
-            parsed = self._parse_json(response.content)
+            # Pydantic 모델이 자동으로 검증하므로 immediate_reaction이 보장됨
+            print(f"🔍 DEBUG - Structured Output 응답:")
+            print(f"  선택지 개수: {len(structured_response.choices)}")
+            for idx, choice in enumerate(structured_response.choices):
+                print(f"  Choice {idx+1}: immediate_reaction 길이 = {len(choice.immediate_reaction)}자")
+                print(f"    내용: {choice.immediate_reaction[:100]}...")
+
+            # Pydantic 모델을 dict로 변환
+            parsed = structured_response.model_dump()
 
             # 노드 ID 생성
             node_id = str(uuid.uuid4())[:8]
@@ -1006,9 +1056,35 @@ class InteractiveStoryDirector:
 
         except json.JSONDecodeError as e:
             print(f"  ⚠️ JSON 파싱 실패: {e}")
-            # 디버깅을 위해 응답의 일부 출력
-            preview = content[:300] if len(content) > 300 else content
-            print(f"  📄 응답 미리보기: {preview}")
+            # 디버깅을 위해 응답의 전체 출력 (최대 2000자)
+            preview = content[:2000] if len(content) > 2000 else content
+            print(f"  📄 응답 미리보기: ```json\n{preview}\n```")
+
+            # 일반적인 JSON 오류 자동 수정 시도
+            print("  🔧 자동 수정 시도 중...")
+            try:
+                fixed_content = content
+
+                # 1. 후행 쉼표 제거 (객체, 배열 모두)
+                fixed_content = re.sub(r',(\s*[}\]])', r'\1', fixed_content)
+
+                # 2. 여러 쉼표 연속을 하나로
+                fixed_content = re.sub(r',\s*,+', ',', fixed_content)
+
+                # 3. 줄바꿈/공백이 있는 후행 쉼표도 제거
+                fixed_content = re.sub(r',\s*\n\s*}', '}', fixed_content)
+                fixed_content = re.sub(r',\s*\n\s*]', ']', fixed_content)
+
+                # 4. JSON 블록 추출
+                json_match = re.search(r'\{[\s\S]*\}', fixed_content)
+                if json_match:
+                    cleaned = json_match.group(0)
+                    print(f"  ✅ 수정된 JSON 길이: {len(cleaned)} chars")
+                    result = json.loads(cleaned)
+                    print(f"  ✅ JSON 파싱 성공! keys: {result.keys() if isinstance(result, dict) else 'N/A'}")
+                    return result
+            except Exception as fix_error:
+                print(f"  ❌ 자동 수정 실패: {fix_error}")
 
         return {}
 
