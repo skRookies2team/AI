@@ -122,11 +122,12 @@ async def validation_exception_handler(request, exc: RequestValidationError):
     print("=" * 80)
 
     # 클라이언트에게도 상세한 에러 반환
+    # 수정 사항: await request.body() 뒤에 .decode('utf-8') 추가하여 bytes 에러 해결
     return JSONResponse(
         status_code=422,
         content={
             "detail": exc.errors(),
-            "body": await request.body() if hasattr(request, 'body') else None
+            "body": (await request.body()).decode('utf-8') if hasattr(request, 'body') else None
         }
     )
 
